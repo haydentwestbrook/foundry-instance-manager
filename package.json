@@ -1,0 +1,27 @@
+{
+  "name": "foundry-instance-manager",
+  "version": "1.0.0",
+  "description": "A tool for managing multiple instances of Foundry VTT, allowing for easy version and content management",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haydentwestbrook/foundry-instance-manager.git"
+  },
+  "keywords": [
+    "foundryvtt",
+    "foundry",
+    "vtt",
+    "rpg",
+    "ttrpg",
+    "react"
+  ],
+  "author": "Hayden Westbrook",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/haydentwestbrook/foundry-instance-manager/issues"
+  },
+  "homepage": "https://github.com/haydentwestbrook/foundry-instance-manager#readme"
+}
