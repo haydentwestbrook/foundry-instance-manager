@@ -2,7 +2,7 @@
   "name": "foundry-instance-manager",
   "version": "1.0.0",
   "description": "A tool for managing multiple instances of Foundry VTT, allowing for easy version and content management",
-  "main": "index.js",
+  "main": "src/index.js",
   "scripts": {
     "test": "test"
   },
@@ -23,5 +23,17 @@
   "bugs": {
     "url": "https://github.com/haydentwestbrook/foundry-instance-manager/issues"
   },
-  "homepage": "https://github.com/haydentwestbrook/foundry-instance-manager#readme"
+  "homepage": "https://github.com/haydentwestbrook/foundry-instance-manager#readme",
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.15.24",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "parcel": "^2.15.2",
+    "typescript": "^5.8.3"
+  }
 }
