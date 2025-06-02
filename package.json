@@ -2,8 +2,10 @@
   "name": "foundry-instance-manager",
   "version": "1.0.0",
   "description": "A tool for managing multiple instances of Foundry VTT, allowing for easy version and content management",
-  "main": "src/index.js",
+  "source": "src/index.js",
   "scripts": {
+    "start": "parcel src/index.html",
+    "build": "parcel build src/index.html --public-url ./",
     "test": "test"
   },
   "repository": {
