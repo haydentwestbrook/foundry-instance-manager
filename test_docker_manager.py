@@ -2,6 +2,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from foundry_manager.docker_manager import DockerManager
+from foundry_manager.cli import load_config, save_config, set_credentials
 
 @pytest.fixture
 def mock_docker_client(mocker):
@@ -18,7 +19,9 @@ def mock_requests(mocker):
         'results': [
             {'name': '11.315', 'last_updated': '2024-01-01T00:00:00Z'},
             {'name': '11.316', 'last_updated': '2024-01-02T00:00:00Z'},
-            {'name': 'latest', 'last_updated': '2024-01-03T00:00:00Z'}
+            {'name': 'latest', 'last_updated': '2024-01-03T00:00:00Z'},
+            {'name': 'beta', 'last_updated': '2024-01-04T00:00:00Z'},
+            {'name': '11.316.1', 'last_updated': '2024-01-05T00:00:00Z'}
         ]
     }
     mock_response.raise_for_status = MagicMock()
@@ -31,6 +34,12 @@ def docker_manager(mock_docker_client, tmp_path):
     with patch('pathlib.Path.cwd', return_value=tmp_path):
         manager = DockerManager()
         return manager
+
+@pytest.fixture
+def mock_config_file(tmp_path):
+    config_file = tmp_path / '.fim' / 'config.json'
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    return config_file
 
 def test_init_creates_directories(docker_manager, tmp_path):
     """Test that initialization creates necessary directories."""
@@ -47,26 +56,36 @@ def test_create_container_success(docker_manager, mock_docker_client):
     
     # Mock container creation
     mock_container = MagicMock()
-    mock_docker_client.containers.create.return_value = mock_container
+    mock_docker_client.containers.run.return_value = mock_container
     
     container = docker_manager.create_container(name, image)
     
     # Verify container was created with correct parameters
-    mock_docker_client.containers.create.assert_called_once()
-    call_args = mock_docker_client.containers.create.call_args[1]
+    mock_docker_client.containers.run.assert_called_once()
+    call_args = mock_docker_client.containers.run.call_args[1]
     assert call_args['image'] == image
     assert call_args['name'] == name
     assert call_args['detach'] is True
     
+    # Verify default environment variables
+    env = call_args['environment']
+    assert env['FOUNDRY_DATA_PATH'] == '/data'
+    assert env['FOUNDRY_HOSTNAME'] == '0.0.0.0'
+    assert env['FOUNDRY_PORT'] == '30000'  # Internal port is always 30000
+    assert env['FOUNDRY_PROXY_PORT'] == '443'
+    assert env['FOUNDRY_PROXY_SSL'] == 'true'
+    assert env['FOUNDRY_MINIFY_STATIC_FILES'] == 'true'
+    assert env['FOUNDRY_UPDATE_CHANNEL'] == 'release'
+    
     # Verify volume mounts
     volumes = call_args['volumes']
     assert len(volumes) == 2
-    assert '/data/container' in [v['bind'] for v in volumes.values()]
-    assert '/data/shared' in [v['bind'] for v in volumes.values()]
+    assert '/data' in [v['bind'] for v in volumes.values()]
+    assert '/shared' in [v['bind'] for v in volumes.values()]
 
 def test_create_container_image_not_found(docker_manager, mock_docker_client):
     """Test container creation with non-existent image."""
-    mock_docker_client.containers.create.side_effect = Exception("Image not found")
+    mock_docker_client.containers.run.side_effect = Exception("Image not found")
     
     with pytest.raises(Exception):
         docker_manager.create_container("test-container", "non-existent-image")
@@ -128,7 +147,8 @@ def test_stop_container_not_found(docker_manager, mock_docker_client):
     with pytest.raises(Exception):
         docker_manager.stop_container("non-existent-container")
 
-def test_remove_container_success(docker_manager, mock_docker_client, tmp_path):
+@patch('click.confirm', return_value=True)
+def test_remove_container_success(mock_confirm, docker_manager, mock_docker_client, tmp_path):
     """Test successful container removal."""
     name = "test-container"
     mock_container = MagicMock()
@@ -159,17 +179,17 @@ def test_remove_container_not_found(docker_manager, mock_docker_client):
 def test_create_container_with_version(docker_manager, mock_docker_client):
     """Test container creation with specific version."""
     name = "test-container"
-    version = "11.315"
+    version = "11.316.1"
     
     # Mock container creation
     mock_container = MagicMock()
-    mock_docker_client.containers.create.return_value = mock_container
+    mock_docker_client.containers.run.return_value = mock_container
     
     container = docker_manager.create_container(name, version=version)
     
     # Verify container was created with correct version
-    mock_docker_client.containers.create.assert_called_once()
-    call_args = mock_docker_client.containers.create.call_args[1]
+    mock_docker_client.containers.run.assert_called_once()
+    call_args = mock_docker_client.containers.run.call_args[1]
     assert call_args['image'] == f"{DockerManager.FOUNDRY_IMAGE}:{version}"
 
 def test_create_container_default_version(docker_manager, mock_docker_client):
@@ -178,13 +198,13 @@ def test_create_container_default_version(docker_manager, mock_docker_client):
     
     # Mock container creation
     mock_container = MagicMock()
-    mock_docker_client.containers.create.return_value = mock_container
+    mock_docker_client.containers.run.return_value = mock_container
     
     container = docker_manager.create_container(name)
     
     # Verify container was created with latest version
-    mock_docker_client.containers.create.assert_called_once()
-    call_args = mock_docker_client.containers.create.call_args[1]
+    mock_docker_client.containers.run.assert_called_once()
+    call_args = mock_docker_client.containers.run.call_args[1]
     assert call_args['image'] == f"{DockerManager.FOUNDRY_IMAGE}:latest"
 
 def test_get_available_versions(docker_manager, mock_requests):
@@ -192,9 +212,10 @@ def test_get_available_versions(docker_manager, mock_requests):
     versions = docker_manager.get_available_versions()
     
     # Verify versions are returned and sorted
-    assert len(versions) == 2  # Excluding 'latest'
-    assert versions[0]['version'] == '11.316'
-    assert versions[1]['version'] == '11.315'
+    assert len(versions) == 3  # Excluding 'latest' and 'beta'
+    assert versions[0]['version'] == '11.316.1'
+    assert versions[1]['version'] == '11.316'
+    assert versions[2]['version'] == '11.315'
 
 def test_get_available_versions_error(docker_manager, mocker):
     """Test error handling when fetching versions fails."""
@@ -206,7 +227,7 @@ def test_get_available_versions_error(docker_manager, mocker):
 def test_migrate_container_success(docker_manager, mock_docker_client):
     """Test successful container migration to new version."""
     name = "test-container"
-    new_version = "11.316"
+    new_version = "11.316.1"
     
     # Mock existing container
     mock_container = MagicMock()
@@ -216,7 +237,7 @@ def test_migrate_container_success(docker_manager, mock_docker_client):
     
     # Mock new container creation
     mock_new_container = MagicMock()
-    mock_docker_client.containers.create.return_value = mock_new_container
+    mock_docker_client.containers.run.return_value = mock_new_container
     
     docker_manager.migrate_container(name, new_version)
     
@@ -225,9 +246,15 @@ def test_migrate_container_success(docker_manager, mock_docker_client):
     mock_container.remove.assert_called_once()
     
     # Verify new container was created with correct version
-    mock_docker_client.containers.create.assert_called_once()
-    call_args = mock_docker_client.containers.create.call_args[1]
+    mock_docker_client.containers.run.assert_called_once()
+    call_args = mock_docker_client.containers.run.call_args[1]
     assert call_args['image'] == f"{DockerManager.FOUNDRY_IMAGE}:{new_version}"
+    
+    # Verify default environment variables are set
+    env = call_args['environment']
+    assert env['FOUNDRY_DATA_PATH'] == '/data'
+    assert env['FOUNDRY_HOSTNAME'] == '0.0.0.0'
+    assert env['FOUNDRY_PORT'] == '30000'
 
 def test_migrate_container_not_found(docker_manager, mock_docker_client):
     """Test migration of non-existent container."""
@@ -255,4 +282,84 @@ def test_list_containers_with_versions(docker_manager, mock_docker_client):
     docker_manager.list_containers()
     
     # Verify containers were listed with versions
-    mock_docker_client.containers.list.assert_called_once_with(all=True) 
+    mock_docker_client.containers.list.assert_called_once_with(all=True)
+
+def test_create_container_with_custom_env(docker_manager, mock_docker_client):
+    """Test container creation with custom environment variables."""
+    name = "test-container"
+    custom_env = {
+        'FOUNDRY_USERNAME': 'testuser',
+        'FOUNDRY_PASSWORD': 'testpass',
+        'FOUNDRY_UPDATE_CHANNEL': 'beta'
+    }
+    
+    # Mock container creation
+    mock_container = MagicMock()
+    mock_docker_client.containers.run.return_value = mock_container
+    
+    container = docker_manager.create_container(name, environment=custom_env)
+    
+    # Verify container was created with merged environment variables
+    mock_docker_client.containers.run.assert_called_once()
+    call_args = mock_docker_client.containers.run.call_args[1]
+    env = call_args['environment']
+    
+    # Check that custom variables override defaults
+    assert env['FOUNDRY_USERNAME'] == 'testuser'
+    assert env['FOUNDRY_PASSWORD'] == 'testpass'
+    assert env['FOUNDRY_UPDATE_CHANNEL'] == 'beta'
+    
+    # Check that default variables are still present
+    assert env['FOUNDRY_DATA_PATH'] == '/data'
+    assert env['FOUNDRY_HOSTNAME'] == '0.0.0.0'
+    assert env['FOUNDRY_PORT'] == '30000'
+
+def test_create_container_with_custom_port(docker_manager, mock_docker_client):
+    """Test container creation with a custom external port."""
+    name = "test-container"
+    port = 8080  # Custom external port
+    
+    # Mock container creation
+    mock_container = MagicMock()
+    mock_docker_client.containers.run.return_value = mock_container
+    
+    container = docker_manager.create_container(name, port=port)
+    
+    # Verify container was created with the correct port mapping
+    mock_docker_client.containers.run.assert_called_once()
+    call_args = mock_docker_client.containers.run.call_args[1]
+    assert call_args['ports']['30000/tcp'] == ('127.0.0.1', port)  # Internal 30000 mapped to external port
+    assert call_args['environment']['FOUNDRY_PORT'] == '30000'  # Internal port is always 30000
+    
+    # Verify default environment variables
+    env = call_args['environment']
+    assert env['FOUNDRY_DATA_PATH'] == '/data'
+    assert env['FOUNDRY_HOSTNAME'] == '0.0.0.0'
+    assert env['FOUNDRY_PROXY_PORT'] == '443'
+    assert env['FOUNDRY_PROXY_SSL'] == 'true'
+    assert env['FOUNDRY_MINIFY_STATIC_FILES'] == 'true'
+    assert env['FOUNDRY_UPDATE_CHANNEL'] == 'release'
+    
+    # Verify volume mounts
+    volumes = call_args['volumes']
+    assert len(volumes) == 2
+    assert '/data' in [v['bind'] for v in volumes.values()]
+    assert '/shared' in [v['bind'] for v in volumes.values()]
+
+def test_set_credentials(mock_config_file):
+    with patch('foundry_manager.cli.CONFIG_FILE', mock_config_file):
+        set_credentials('test_username', 'test_password')
+        config = load_config()
+        assert config['foundry_username'] == 'test_username'
+        assert config['foundry_password'] == 'test_password'
+
+def test_create_container_with_credentials(mock_config_file):
+    with patch('foundry_manager.cli.CONFIG_FILE', mock_config_file):
+        save_config({'foundry_username': 'test_username', 'foundry_password': 'test_password'})
+        with patch('foundry_manager.docker_manager.DockerManager.create_container') as mock_create:
+            from foundry_manager.cli import create
+            create('test_container', 'test_image', 'test_version', 30000, [])
+            mock_create.assert_called_once()
+            args, kwargs = mock_create.call_args
+            assert kwargs['environment']['FOUNDRY_USERNAME'] == 'test_username'
+            assert kwargs['environment']['FOUNDRY_PASSWORD'] == 'test_password' 

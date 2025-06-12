@@ -1,172 +1,136 @@
 #!/usr/bin/env python3
 
 import docker
-import requests
 from rich.console import Console
 from rich.table import Table
 from pathlib import Path
 from typing import Optional, List, Dict
+import shutil
+import logging
+from docker.models.containers import Container
 
 console = Console()
+logger = logging.getLogger("foundry-manager")
+
+class DockerError(Exception):
+    """Base exception for Docker-related errors."""
+    pass
+
+class ContainerNotFoundError(DockerError):
+    """Raised when a container is not found."""
+    pass
+
+class ContainerOperationError(DockerError):
+    """Raised when a container operation fails."""
+    pass
 
 class DockerManager:
-    FOUNDRY_IMAGE = "felddy/foundryvtt"
-    
-    def __init__(self, base_dir: Path = None):
-        self.client = docker.from_env()
+    def __init__(self, base_dir: Optional[Path] = None):
+        """Initialize the Docker manager."""
         self.base_dir = base_dir or Path.cwd()
-        self.shared_data_dir = self.base_dir / "data" / "shared"
-        self.containers_data_dir = self.base_dir / "data" / "containers"
+        self.containers_data_dir = self.base_dir / "containers"
+        self.shared_data_dir = self.base_dir / "shared"
         
-        # Create necessary directories if they don't exist
-        self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+        # Create necessary directories
         self.containers_data_dir.mkdir(parents=True, exist_ok=True)
-
-    def get_available_versions(self) -> List[Dict[str, str]]:
-        """Get list of available Foundry VTT versions from Docker Hub."""
+        self.shared_data_dir.mkdir(parents=True, exist_ok=True)
+        
         try:
-            # Get tags from Docker Hub API
-            response = requests.get(f"https://registry.hub.docker.com/v2/repositories/{self.FOUNDRY_IMAGE}/tags")
-            response.raise_for_status()
-            
-            # Filter and sort versions
-            versions = []
-            for tag in response.json()['results']:
-                if tag['name'] != 'latest':
-                    versions.append({
-                        'version': tag['name'],
-                        'last_updated': tag['last_updated']
-                    })
-            
-            # Sort by version number
-            versions.sort(key=lambda x: x['version'], reverse=True)
-            return versions
-        except requests.RequestException as e:
-            console.print(f"[red]Error fetching versions: {str(e)}[/red]")
-            return []
+            self.client = docker.from_env()
+            logger.debug("Docker client initialized successfully")
+        except docker.errors.DockerException as e:
+            logger.error("Failed to initialize Docker client")
+            raise DockerError("Docker is not running or not accessible") from e
 
-    def create_container(self, name: str, image: str = None, version: str = None):
-        """Create a new container with individual and shared data directories."""
-        container_data_dir = self.containers_data_dir / name
-        container_data_dir.mkdir(exist_ok=True)
-
-        # Construct image name with version if specified
-        if version:
-            image = f"{self.FOUNDRY_IMAGE}:{version}"
-        elif not image:
-            image = f"{self.FOUNDRY_IMAGE}:latest"
-
+    def get_container(self, name: str) -> Container:
+        """Get a container by name, raising appropriate exceptions if not found."""
         try:
-            container = self.client.containers.create(
+            container = self.client.containers.get(name)
+            logger.debug(f"Found container: {name}")
+            return container
+        except docker.errors.NotFound:
+            logger.error(f"Container not found: {name}")
+            raise ContainerNotFoundError(f"Container '{name}' not found")
+        except docker.errors.APIError as e:
+            logger.error(f"Docker API error while getting container {name}: {e}")
+            raise DockerError(f"Failed to get container: {str(e)}")
+
+    def create_container(self, name: str, image: str, environment: Optional[Dict[str, str]] = None, 
+                        port: Optional[int] = None, volumes: Optional[Dict[str, Dict]] = None,
+                        proxy_port: Optional[int] = None) -> Container:
+        """Create a new Docker container."""
+        try:
+            # Set up port mappings
+            ports = {
+                '30000/tcp': ('127.0.0.1', port if port is not None else 30000)
+            }
+            
+            # Add proxy port if specified
+            if proxy_port is not None:
+                ports['443/tcp'] = ('127.0.0.1', proxy_port)
+
+            # Create container with environment variables
+            container = self.client.containers.run(
                 image=image,
                 name=name,
-                volumes={
-                    str(container_data_dir): {'bind': '/data/container', 'mode': 'rw'},
-                    str(self.shared_data_dir): {'bind': '/data/shared', 'mode': 'ro'}
-                },
-                detach=True
+                detach=True,
+                ports=ports,
+                volumes=volumes or {},
+                environment=environment or {},
+                restart_policy={'Name': 'unless-stopped'}
             )
-            console.print(f"[green]Successfully created container: {name} with image {image}[/green]")
+            logger.info(f"Container {name} created successfully")
             return container
+
         except docker.errors.ImageNotFound:
-            console.print(f"[red]Error: Image {image} not found[/red]")
-            raise
+            logger.error(f"Docker image not found: {image}")
+            raise DockerError(f"Image '{image}' not found")
         except docker.errors.APIError as e:
-            console.print(f"[red]Error creating container: {str(e)}[/red]")
-            raise
+            logger.error(f"Docker API error while creating container: {e}")
+            raise DockerError(f"Failed to create container: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error while creating container: {e}")
+            raise DockerError(f"Failed to create container: {str(e)}")
 
-    def list_containers(self):
-        """List all containers managed by this tool."""
-        containers = self.client.containers.list(all=True)
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Name")
-        table.add_column("Status")
-        table.add_column("Image")
-        table.add_column("Version")
+    def get_containers(self) -> List[Container]:
+        """List all containers."""
+        return self.client.containers.list(all=True)
 
-        for container in containers:
-            image_tags = container.image.tags[0] if container.image.tags else "N/A"
-            version = image_tags.split(':')[-1] if ':' in image_tags else "latest"
-            table.add_row(
-                container.name,
-                container.status,
-                image_tags,
-                version
-            )
-        
-        console.print(table)
-
-    def migrate_container(self, name: str, new_version: str):
-        """Migrate a container to a new Foundry VTT version."""
+    def start_container(self, name: str) -> None:
+        """Start a container."""
         try:
-            # Get current container
-            container = self.client.containers.get(name)
-            current_image = container.image.tags[0] if container.image.tags else "N/A"
-            
-            # Stop the container
-            if container.status == "running":
-                container.stop()
-            
-            # Remove the container but keep the data
-            container.remove()
-            
-            # Create new container with the same name and data
-            new_image = f"{self.FOUNDRY_IMAGE}:{new_version}"
-            self.create_container(name, image=new_image)
-            
-            console.print(f"[green]Successfully migrated {name} from {current_image} to {new_image}[/green]")
-        except docker.errors.NotFound:
-            console.print(f"[red]Error: Container {name} not found[/red]")
-            raise
-        except docker.errors.APIError as e:
-            console.print(f"[red]Error during migration: {str(e)}[/red]")
-            raise
-
-    def start_container(self, name: str):
-        """Start a container by name."""
-        try:
-            container = self.client.containers.get(name)
+            container = self.get_container(name)
             container.start()
-            console.print(f"[green]Successfully started container: {name}[/green]")
-        except docker.errors.NotFound:
-            console.print(f"[red]Error: Container {name} not found[/red]")
-            raise
+            logger.info(f"Container {name} started successfully")
         except docker.errors.APIError as e:
-            console.print(f"[red]Error starting container: {str(e)}[/red]")
-            raise
+            logger.error(f"Failed to start container {name}: {e}")
+            raise ContainerOperationError(f"Failed to start container: {str(e)}")
 
-    def stop_container(self, name: str):
-        """Stop a container by name."""
+    def stop_container(self, name: str) -> None:
+        """Stop a container."""
         try:
-            container = self.client.containers.get(name)
+            container = self.get_container(name)
             container.stop()
-            console.print(f"[green]Successfully stopped container: {name}[/green]")
-        except docker.errors.NotFound:
-            console.print(f"[red]Error: Container {name} not found[/red]")
-            raise
+            logger.info(f"Container {name} stopped successfully")
         except docker.errors.APIError as e:
-            console.print(f"[red]Error stopping container: {str(e)}[/red]")
-            raise
+            logger.error(f"Failed to stop container {name}: {e}")
+            raise ContainerOperationError(f"Failed to stop container: {str(e)}")
 
-    def remove_container(self, name: str):
-        """Remove a container by name."""
+    def remove_container(self, name: str) -> None:
+        """Remove a container."""
         try:
-            container = self.client.containers.get(name)
-            container.remove(force=True)
-            # Remove container's data directory
-            container_data_dir = self.containers_data_dir / name
-            if container_data_dir.exists():
-                for item in container_data_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        for subitem in item.iterdir():
-                            subitem.unlink()
-                container_data_dir.rmdir()
-            console.print(f"[green]Successfully removed container: {name}[/green]")
-        except docker.errors.NotFound:
-            console.print(f"[red]Error: Container {name} not found[/red]")
-            raise
+            container = self.get_container(name)
+            container.remove(v=True, force=True)
+            logger.info(f"Container {name} removed successfully")
         except docker.errors.APIError as e:
-            console.print(f"[red]Error removing container: {str(e)}[/red]")
-            raise 
+            logger.error(f"Failed to remove container {name}: {e}")
+            raise ContainerOperationError(f"Failed to remove container: {str(e)}")
+
+    def exec_command(self, name: str, command: str) -> tuple:
+        """Execute a command in a container."""
+        try:
+            container = self.get_container(name)
+            return container.exec_run(command)
+        except docker.errors.APIError as e:
+            logger.error(f"Failed to execute command in container {name}: {e}")
+            raise ContainerOperationError(f"Failed to execute command: {str(e)}") 
