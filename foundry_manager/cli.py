@@ -215,5 +215,67 @@ def versions():
         logger.exception(f"Failed to list versions: {e}")
         raise click.ClickException(f"Failed to list versions: {str(e)}")
 
+@cli.command()
+@click.argument('config_file', type=click.Path(exists=True, dir_okay=False))
+@click.option('--save', is_flag=True, help='Save the provided config file as the default config')
+def apply_config(config_file: str, save: bool):
+    """Create instances based on the provided configuration file.
+    
+    This command will:
+    1. Remove any existing instances that are not in the config file
+    2. Update any existing instances that don't match the config
+    3. Create any new instances specified in the config
+    
+    CONFIG_FILE: Path to the JSON configuration file
+    """
+    try:
+        # Load the provided config file
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        
+        # Save the config if requested
+        if save:
+            from .config import save_config
+            save_config(config)
+            print_success(f"Saved configuration from {config_file}")
+        
+        # Create instances from the config
+        manager = FoundryInstanceManager()
+        
+        # Get existing instances before applying config
+        existing_instances = manager.list_instances()
+        existing_names = {instance.name for instance in existing_instances}
+        config_names = set(config.get('instances', {}).keys())
+        
+        # Show what will be removed
+        instances_to_remove = existing_names - config_names
+        if instances_to_remove:
+            print_warning(f"The following instances will be removed as they're not in the config:")
+            for name in instances_to_remove:
+                print_warning(f"- {name}")
+        
+        # Apply the config
+        instances = manager.create_instances_from_config(config)
+        
+        # Show results
+        if instances:
+            print_success(f"Successfully applied configuration:")
+            for instance in instances:
+                if instance.name in instances_to_remove:
+                    print_info(f"- Removed: {instance.name}")
+                elif instance.name in existing_names:
+                    print_info(f"- Updated: {instance.name} (v{instance.version})")
+                else:
+                    print_info(f"- Created: {instance.name} (v{instance.version})")
+        else:
+            print_info("No instances were created or updated from config")
+            
+    except json.JSONDecodeError:
+        print_error(f"Invalid JSON in config file: {config_file}")
+        raise click.Abort()
+    except Exception as e:
+        print_error(f"Error applying config: {e}")
+        raise click.Abort()
+
 if __name__ == '__main__':
     cli() 

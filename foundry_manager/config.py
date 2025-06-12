@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 import logging
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,8 @@ def load_config() -> dict:
         # Create default config
         config = {
             'base_dir': str(Path.home() / 'foundry-instances'),
-            'shared_dir': str(Path.home() / 'foundry-shared')
+            'shared_dir': str(Path.home() / 'foundry-shared'),
+            'instances': {}  # Dictionary of instance configurations
         }
         save_config(config)
         return config
@@ -46,4 +48,32 @@ def get_base_dir() -> Path:
 def get_shared_dir() -> Path:
     """Get the shared directory for Foundry instances."""
     config = load_config()
-    return Path(config['shared_dir']) 
+    return Path(config['shared_dir'])
+
+def get_instances() -> Dict[str, dict]:
+    """Get all instance configurations."""
+    config = load_config()
+    return config.get('instances', {})
+
+def add_instance(name: str, version: str, data_dir: Optional[str] = None, 
+                port: int = 30000, environment: Optional[Dict[str, str]] = None) -> None:
+    """Add an instance configuration."""
+    config = load_config()
+    if 'instances' not in config:
+        config['instances'] = {}
+    
+    config['instances'][name] = {
+        'version': version,
+        'data_dir': data_dir or str(Path(config['base_dir']) / name),
+        'port': port,
+        'environment': environment or {}
+    }
+    
+    save_config(config)
+
+def remove_instance(name: str) -> None:
+    """Remove an instance configuration."""
+    config = load_config()
+    if 'instances' in config and name in config['instances']:
+        del config['instances'][name]
+        save_config(config) 

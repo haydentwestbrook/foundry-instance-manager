@@ -269,3 +269,80 @@ class FoundryInstanceManager:
         except (requests.RequestException, Exception) as e:
             logger.error(f"Failed to get available versions: {e}")
             return []
+    
+    def create_instances_from_config(self, config: Optional[dict] = None) -> List[FoundryInstance]:
+        """Create instances based on the configuration.
+        
+        Args:
+            config: Optional configuration dictionary. If not provided, loads from default config file.
+        """
+        if config is None:
+            from .config import get_instances
+            instance_configs = get_instances()
+        else:
+            instance_configs = config.get('instances', {})
+        
+        created_instances = []
+        
+        # Get all existing instances
+        existing_instances = self.list_instances()
+        existing_names = {instance.name for instance in existing_instances}
+        config_names = set(instance_configs.keys())
+        
+        # Remove instances that are not in the config
+        instances_to_remove = existing_names - config_names
+        for name in instances_to_remove:
+            try:
+                logger.info(f"Removing instance {name} as it's not in the config")
+                self.remove_instance(name)
+            except Exception as e:
+                logger.error(f"Failed to remove instance {name}: {e}")
+                # Continue with other instances even if one fails
+                continue
+        
+        # Create or update instances from config
+        for name, instance_config in instance_configs.items():
+            try:
+                # Check if instance exists
+                existing_instance = self.get_instance(name)
+                if existing_instance:
+                    # Check if instance needs to be updated
+                    needs_update = (
+                        existing_instance.version != instance_config['version'] or
+                        existing_instance.port != instance_config['port'] or
+                        existing_instance.data_dir != Path(instance_config['data_dir'])
+                    )
+                    
+                    if needs_update:
+                        logger.info(f"Updating instance {name} to match config")
+                        # Remove existing instance
+                        self.remove_instance(name)
+                        # Create new instance
+                        instance = self.create_instance(
+                            name=name,
+                            version=instance_config['version'],
+                            port=instance_config['port'],
+                            environment=instance_config.get('environment', {})
+                        )
+                        created_instances.append(instance)
+                    else:
+                        logger.info(f"Instance {name} already matches config, skipping")
+                        created_instances.append(existing_instance)
+                    continue
+                
+                # Create new instance
+                instance = self.create_instance(
+                    name=name,
+                    version=instance_config['version'],
+                    port=instance_config['port'],
+                    environment=instance_config.get('environment', {})
+                )
+                created_instances.append(instance)
+                logger.info(f"Created instance {name} from config")
+                
+            except Exception as e:
+                logger.error(f"Failed to create/update instance {name} from config: {e}")
+                # Continue with other instances even if one fails
+                continue
+        
+        return created_instances
