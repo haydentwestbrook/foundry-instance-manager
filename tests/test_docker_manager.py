@@ -113,7 +113,7 @@ class TestContainerManagement:
         # Attempt to get container
         with pytest.raises(ContainerNotFoundError) as exc_info:
             docker_manager.get_container("nonexistent-container")
-        assert str(exc_info.value) == "Container nonexistent-container not found"
+        assert str(exc_info.value) == "Container 'nonexistent-container' not found"
 
     def test_start_container_success(self, docker_manager, mock_docker_client):
         """Test starting a container."""
@@ -169,7 +169,7 @@ class TestErrorHandling:
         # Attempt to start container
         with pytest.raises(ContainerNotFoundError) as exc_info:
             docker_manager.start_container("nonexistent-container")
-        assert str(exc_info.value) == "Container nonexistent-container not found"
+        assert str(exc_info.value) == "Container 'nonexistent-container' not found"
 
     def test_stop_nonexistent_container(self, docker_manager, mock_docker_client):
         """Test stopping a non-existent container."""
@@ -179,7 +179,7 @@ class TestErrorHandling:
         # Attempt to stop container
         with pytest.raises(ContainerNotFoundError) as exc_info:
             docker_manager.stop_container("nonexistent-container")
-        assert str(exc_info.value) == "Container nonexistent-container not found"
+        assert str(exc_info.value) == "Container 'nonexistent-container' not found"
 
     def test_remove_nonexistent_container(self, docker_manager, mock_docker_client):
         """Test removing a non-existent container."""
@@ -189,7 +189,7 @@ class TestErrorHandling:
         # Attempt to remove container
         with pytest.raises(ContainerNotFoundError) as exc_info:
             docker_manager.remove_container("nonexistent-container")
-        assert str(exc_info.value) == "Container nonexistent-container not found"
+        assert str(exc_info.value) == "Container 'nonexistent-container' not found"
 
     def test_create_container_failure(self, docker_manager, mock_docker_client):
         """Test container creation failure."""
