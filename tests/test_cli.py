@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from foundry_manager.cli import cli, load_config, save_config
 from foundry_manager.foundry_instance_manager import FoundryInstanceManager, FoundryInstance
-from foundry_manager.instance_record import InstanceRecord
+from foundry_manager.instance_record_manager import InstanceRecord
 
 # Test data
 TEST_CONFIG = {

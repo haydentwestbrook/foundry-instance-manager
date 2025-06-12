@@ -4,7 +4,7 @@ import logging
 import requests
 from docker.models.containers import Container
 from .docker_manager import DockerManager, ContainerNotFoundError
-from .instance_record import InstanceRecordManager, InstanceRecord
+from .instance_record_manager import InstanceRecordManager, InstanceRecord
 
 logger = logging.getLogger("foundry-manager")
 

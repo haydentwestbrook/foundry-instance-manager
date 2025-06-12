@@ -1,7 +1,7 @@
 import pytest
 import json
 from pathlib import Path
-from foundry_manager.instance_record import InstanceRecordManager, InstanceRecord
+from foundry_manager.instance_record_manager import InstanceRecordManager, InstanceRecord
 
 @pytest.fixture
 def base_dir(tmp_path):

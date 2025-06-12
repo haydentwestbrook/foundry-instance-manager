@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from foundry_manager.foundry_instance_manager import FoundryInstanceManager, FoundryInstance
 from foundry_manager.docker_manager import ContainerNotFoundError
-from foundry_manager.instance_record import InstanceRecord
+from foundry_manager.instance_record_manager import InstanceRecord
 
 @pytest.fixture
 def base_dir(tmp_path):
