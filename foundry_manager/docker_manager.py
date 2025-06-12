@@ -48,8 +48,8 @@ class DockerManager:
             container = self.client.containers.get(name)
             logger.debug(f"Found container: {name}")
             return container
-        except docker.errors.NotFound:
-            logger.error(f"Container not found: {name}")
+        except (docker.errors.NotFound, Exception) as e:
+            logger.debug(f"Container not found: {name}")
             raise ContainerNotFoundError(f"Container '{name}' not found")
         except docker.errors.APIError as e:
             logger.error(f"Docker API error while getting container {name}: {e}")
@@ -62,12 +62,12 @@ class DockerManager:
         try:
             # Set up port mappings
             ports = {
-                '30000/tcp': ('127.0.0.1', port if port is not None else 30000)
+                '30000/tcp': port if port is not None else 30000
             }
             
             # Add proxy port if specified
             if proxy_port is not None:
-                ports['443/tcp'] = ('127.0.0.1', proxy_port)
+                ports['443/tcp'] = proxy_port
 
             # Create container with environment variables
             container = self.client.containers.run(
@@ -87,10 +87,10 @@ class DockerManager:
             raise DockerError(f"Image '{image}' not found")
         except docker.errors.APIError as e:
             logger.error(f"Docker API error while creating container: {e}")
-            raise DockerError(f"Failed to create container: {str(e)}")
+            raise DockerError(str(e))
         except Exception as e:
             logger.error(f"Unexpected error while creating container: {e}")
-            raise DockerError(f"Failed to create container: {str(e)}")
+            raise DockerError(str(e))
 
     def get_containers(self) -> List[Container]:
         """List all containers."""
@@ -120,7 +120,7 @@ class DockerManager:
         """Remove a container."""
         try:
             container = self.get_container(name)
-            container.remove(v=True, force=True)
+            container.remove(force=True)
             logger.info(f"Container {name} removed successfully")
         except docker.errors.APIError as e:
             logger.error(f"Failed to remove container {name}: {e}")
@@ -133,4 +133,53 @@ class DockerManager:
             return container.exec_run(command)
         except docker.errors.APIError as e:
             logger.error(f"Failed to execute command in container {name}: {e}")
-            raise ContainerOperationError(f"Failed to execute command: {str(e)}") 
+            raise ContainerOperationError(f"Failed to execute command: {str(e)}")
+
+    def get_available_versions(self) -> List[Dict[str, str]]:
+        """Get available Foundry VTT versions."""
+        try:
+            # Get all tags for the felddy/foundryvtt image
+            image = self.client.images.get("felddy/foundryvtt")
+            versions = []
+            for tag in image.tags:
+                if ':' in tag:
+                    version = tag.split(':')[1]
+                    versions.append({'version': version})
+            return versions
+        except docker.errors.ImageNotFound:
+            logger.error("Foundry VTT image not found")
+            return []
+        except docker.errors.APIError as e:
+            logger.error(f"Failed to get available versions: {e}")
+            raise DockerError(f"Failed to get available versions: {str(e)}")
+
+    def migrate_container(self, name: str, new_version: str) -> Container:
+        """Migrate a container to a new version."""
+        try:
+            # Get the current container
+            container = self.get_container(name)
+            
+            # Stop the container
+            container.stop()
+            
+            # Get the container's configuration
+            container_config = container.attrs
+            
+            # Create a new container with the new version
+            new_container = self.create_container(
+                name=name,
+                image=f"felddy/foundryvtt:{new_version}",
+                environment=container_config['Config']['Env'],
+                port=container_config['HostConfig']['PortBindings']['30000/tcp'][0]['HostPort'],
+                volumes=container_config['HostConfig']['Binds']
+            )
+            
+            # Remove the old container
+            container.remove()
+            
+            logger.info(f"Container {name} migrated to version {new_version}")
+            return new_container
+            
+        except docker.errors.APIError as e:
+            logger.error(f"Failed to migrate container {name}: {e}")
+            raise ContainerOperationError(f"Failed to migrate container: {str(e)}") 

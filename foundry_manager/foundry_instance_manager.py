@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import List, Optional, Dict
 import logging
 import requests
+from docker.models.containers import Container
 from .docker_manager import DockerManager, ContainerNotFoundError
 from .instance_record import InstanceRecordManager, InstanceRecord
 
@@ -18,19 +19,29 @@ class FoundryInstance:
         self._container = container
     
     @property
+    def container(self) -> Optional[Container]:
+        """Get the container associated with this instance."""
+        return self._container
+    
+    @container.setter
+    def container(self, value):
+        """Set the container associated with this instance."""
+        self._container = value
+    
+    @property
     def status(self) -> str:
         """Get the current status of the instance."""
         if self._container:
             return self._container.status
-        return "stopped"
+        return "unknown"
 
 class FoundryInstanceManager:
     """Manages Foundry VTT instances."""
     
-    def __init__(self, base_dir: Path):
-        self.base_dir = base_dir
-        self.docker_manager = DockerManager(base_dir)
-        self.record_manager = InstanceRecordManager(base_dir)
+    def __init__(self, base_dir: Optional[Path] = None):
+        self.base_dir = base_dir or Path.cwd()
+        self.docker_manager = DockerManager(self.base_dir)
+        self.record_manager = InstanceRecordManager(self.base_dir)
     
     def create_instance(self, name: str, version: Optional[str] = None, port: int = 30000, environment: Dict[str, str] = None) -> FoundryInstance:
         """Create a new Foundry VTT instance."""
@@ -172,21 +183,33 @@ class FoundryInstanceManager:
         if not instance:
             raise ValueError(f"Instance {name} not found")
         
-        # Stop container if running
-        if instance.status == "running":
-            self.stop_instance(name)
+        # Stop and remove container if it exists
+        try:
+            if instance.status == "running":
+                self.stop_instance(name)
+            self.docker_manager.remove_container(name)
+        except ContainerNotFoundError:
+            # Container is already gone, which is fine
+            logger.info(f"Container {name} not found during removal, proceeding with cleanup")
+        except Exception as e:
+            logger.error(f"Failed to remove container: {e}")
+            raise
         
-        # Remove container
-        self.docker_manager.remove_container(name)
-        
-        # Remove data directory
+        # Remove data directory recursively
         if instance.data_dir.exists():
-            for item in instance.data_dir.iterdir():
-                if item.is_file():
-                    item.unlink()
-                elif item.is_dir():
-                    item.rmdir()
-            instance.data_dir.rmdir()
+            def remove_directory(path):
+                for item in path.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        remove_directory(item)
+                path.rmdir()
+            
+            try:
+                remove_directory(instance.data_dir)
+            except Exception as e:
+                logger.error(f"Failed to remove data directory: {e}")
+                raise
         
         # Remove record
         self.record_manager.remove_record(name)
