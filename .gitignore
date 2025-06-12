@@ -17,7 +17,9 @@ build/
 
 # Test coverage
 coverage/
+.pytest_cache
 __pycache__/
+foundry_manager/__pycache__/
 
 # Temporary files
 tmp/
