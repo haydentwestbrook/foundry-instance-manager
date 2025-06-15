@@ -36,7 +36,7 @@ echo_and_run python -m foundry_manager.cli set-credentials --username testuser -
 echo_and_run python -m foundry_manager.cli create "$INSTANCE" --version "$FOUNDRY_VERSION" --port "$PORT" --admin-key "$ADMIN_KEY" --proxy-port 8443
 
 # 5. List instances
-echo_and_run python -m foundry_manager.cli list-instances
+echo_and_run python -m foundry_manager.cli list
 
 # 6. Start and stop instance
 echo_and_run python -m foundry_manager.cli start "$INSTANCE"

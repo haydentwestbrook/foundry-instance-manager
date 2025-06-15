@@ -169,7 +169,7 @@ class TestListCommands:
     - Listing available Foundry VTT versions
     """
 
-    def test_list_instances(self, runner, mock_instance_manager, mock_config_dir):
+    def test_list(self, runner, mock_instance_manager, mock_config_dir):
         """Test listing all instances."""
         # Mock instance data
         mock_instance = MagicMock(spec=FoundryInstance)
@@ -186,7 +186,7 @@ class TestListCommands:
             "foundry_manager.cli.FoundryInstanceManager",
             return_value=mock_instance_manager,
         ):
-            result = runner.invoke(cli, ["list-instances"])
+            result = runner.invoke(cli, ["list"])
             if result.exit_code != 0:
                 print("\n--- CLI OUTPUT ---\n", result.output)
                 print("\n--- CLI EXCEPTION ---\n", result.exception)

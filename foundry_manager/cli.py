@@ -242,8 +242,8 @@ def migrate(name, version):
         raise click.ClickException(f"Failed to migrate instance: {str(e)}")
 
 
-@cli.command()
-def list_instances():
+@cli.command("list")
+def list():
     """List all Foundry VTT instances and their status."""
     try:
         config = load_config()
