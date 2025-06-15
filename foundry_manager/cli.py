@@ -101,7 +101,7 @@ def set_credentials(username, password):
 @click.option(
     "--port",
     type=int,
-    help="External port to map Foundry VTT to (default: 30000)",
+    help="Host port to map to Foundry's internal port 30000 (default: 30000)",
     default=30000,
 )
 @click.option(

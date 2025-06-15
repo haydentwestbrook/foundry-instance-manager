@@ -249,4 +249,7 @@ class TestErrorHandling:
             docker_manager.create_container(
                 name="test-container", image="test-image:latest", port=30000
             )
-        assert str(exc_info.value) == "Failed to create container"
+        assert (
+            str(exc_info.value)
+            == "Failed to create container: Failed to create container"
+        )

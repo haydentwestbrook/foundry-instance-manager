@@ -69,19 +69,41 @@ class DockerManager:
         self,
         name: str,
         image: str,
+        volumes: Optional[Dict[str, Dict[str, str]]] = None,
         environment: Optional[Dict[str, str]] = None,
-        port: Optional[int] = None,
-        volumes: Optional[Dict[str, Dict]] = None,
+        port: int = 30000,
         proxy_port: Optional[int] = None,
     ) -> Container:
-        """Create a new Docker container."""
-        try:
-            # Set up port mappings
-            ports = {"30000/tcp": port if port is not None else 30000}
+        """Create a new container.
 
-            # Add proxy port if specified
-            if proxy_port is not None:
+        Args:
+            name: The name of the container
+            image: The Docker image to use
+            volumes: Optional volume mappings
+            environment: Optional environment variables
+            port: The host port to map to container port 30000 (default: 30000)
+            proxy_port: Optional proxy port to map
+
+        Returns:
+            The created container
+
+        Raises:
+            Exception: If container creation fails
+        """
+        try:
+            # Configure ports - always map to container port 30000
+            ports = {"30000/tcp": port}
+            if proxy_port:
                 ports["443/tcp"] = proxy_port
+
+            # Configure health check
+            healthcheck = {
+                "test": ["CMD", "curl", "-f", "http://localhost:30000/"],
+                "interval": 1000000000,  # 1 second in nanoseconds
+                "timeout": 3000000000,  # 3 seconds in nanoseconds
+                "retries": 3,
+                "start_period": 30000000000,  # 30 seconds in nanoseconds
+            }
 
             # Create container with environment variables
             container = self.client.containers.run(  # type: ignore[call-overload]
@@ -92,19 +114,11 @@ class DockerManager:
                 volumes=volumes or {},
                 environment=environment or {},
                 restart_policy={"Name": "unless-stopped"},
+                healthcheck=healthcheck,
             )
-            logger.info(f"Container {name} created successfully")
             return container
-
-        except docker.errors.ImageNotFound:
-            logger.error(f"Docker image not found: {image}")
-            raise DockerError(f"Image '{image}' not found")
-        except docker.errors.APIError as e:
-            logger.error(f"Docker API error while creating container: {e}")
-            raise DockerError(str(e))
         except Exception as e:
-            logger.error(f"Unexpected error while creating container: {e}")
-            raise DockerError(str(e))
+            raise Exception(f"Failed to create container: {str(e)}")
 
     def get_containers(self) -> List[Container]:
         """List all containers."""
@@ -168,7 +182,18 @@ class DockerManager:
             raise DockerError(f"Failed to get available versions: {str(e)}")
 
     def migrate_container(self, name: str, new_version: str) -> Container:
-        """Migrate a container to a new version."""
+        """Migrate a container to a new version.
+
+        Args:
+            name: The name of the container to migrate
+            new_version: The new version to migrate to
+
+        Returns:
+            The new container
+
+        Raises:
+            ContainerOperationError: If migration fails
+        """
         try:
             # Get the current container
             container = self.get_container(name)
@@ -179,14 +204,31 @@ class DockerManager:
             # Get the container's configuration
             container_config = container.attrs
 
+            # Extract the host port from the current container's port bindings
+            host_port = None
+            if "30000/tcp" in container_config["HostConfig"]["PortBindings"]:
+                host_port = int(
+                    container_config["HostConfig"]["PortBindings"]["30000/tcp"][0][
+                        "HostPort"
+                    ]
+                )
+
+            # Extract proxy port if it exists
+            proxy_port = None
+            if "443/tcp" in container_config["HostConfig"]["PortBindings"]:
+                proxy_port = int(
+                    container_config["HostConfig"]["PortBindings"]["443/tcp"][0][
+                        "HostPort"
+                    ]
+                )
+
             # Create a new container with the new version
             new_container = self.create_container(
                 name=name,
                 image=f"felddy/foundryvtt:{new_version}",
                 environment=container_config["Config"]["Env"],
-                port=container_config["HostConfig"]["PortBindings"]["30000/tcp"][0][
-                    "HostPort"
-                ],
+                port=host_port or 30000,  # Use existing host port or default to 30000
+                proxy_port=proxy_port,
                 volumes=container_config["HostConfig"]["Binds"],
             )
 

@@ -22,6 +22,8 @@ def format_instance_table(instances: List[dict]) -> Table:
         status = instance["status"]
         if status == "running":
             status = "[green]running[/green]"
+        elif status == "starting":
+            status = "[yellow]starting[/yellow]"
         elif status == "exited":
             status = "[red]stopped[/red]"
         else:
@@ -30,7 +32,7 @@ def format_instance_table(instances: List[dict]) -> Table:
         # Create link based on status
         link = (
             f"http://localhost:{instance['port']}"
-            if status == "[green]running[/green]"
+            if status in ["[green]running[/green]", "[yellow]starting[/yellow]"]
             else "-"
         )
 

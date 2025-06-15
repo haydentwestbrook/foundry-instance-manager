@@ -46,9 +46,17 @@ class FoundryInstance:
     @property
     def status(self) -> str:
         """Get the current status of the instance."""
-        if self._container:
-            return self._container.status
-        return "unknown"
+        if not self._container:
+            return "unknown"
+
+        container_status = self._container.status
+        if container_status == "running":
+            # Check if container is healthy
+            health = self._container.attrs.get("State", {}).get("Health", {})
+            if health and health.get("Status") == "starting":
+                return "starting"
+            return "running"
+        return container_status
 
 
 class FoundryInstanceManager:
@@ -392,6 +400,11 @@ class FoundryInstanceManager:
         except ContainerNotFoundError:
             pass
 
+        # Get proxy port if SSL is enabled
+        proxy_port = self._get_proxy_port(
+            instance.container.attrs["Config"]["Env"] if instance.container else {}
+        )
+
         # Create new container with new version
         self.docker_manager.create_container(
             name=name,
@@ -401,6 +414,7 @@ class FoundryInstanceManager:
                 instance.container.attrs["Config"]["Env"] if instance.container else {}
             ),
             port=instance.port,
+            proxy_port=proxy_port,
         )
 
         # Update record
