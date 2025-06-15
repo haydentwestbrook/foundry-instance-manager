@@ -1,0 +1,35 @@
+template: |
+  {% if version %}
+  # {{ version }}
+  {% endif %}
+
+  {% for type, commits in commits | groupby("type") %}
+  ## {{ type | title }}
+  {% for commit in commits %}
+  - {{ commit.subject }} ({{ commit.hash }}){% if commit.author %} by {{ commit.author }}{% endif %}
+  {% endfor %}
+  {% endfor %}
+
+sections:
+  - type: feat
+    name: Features
+  - type: fix
+    name: Bug Fixes
+  - type: docs
+    name: Documentation
+  - type: style
+    name: Style
+  - type: refactor
+    name: Refactoring
+  - type: perf
+    name: Performance
+  - type: test
+    name: Testing
+  - type: build
+    name: Build
+  - type: ci
+    name: CI
+  - type: chore
+    name: Chores
+  - type: revert
+    name: Reverts

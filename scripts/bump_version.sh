@@ -13,6 +13,10 @@ fi
 # Get current version
 CURRENT_VERSION=$(python -c "from foundry_manager import __version__; print(__version__)")
 
+# Generate changelog
+echo "Generating changelog..."
+git-changelog -o CHANGELOG.md
+
 # Bump version
 bump2version --allow-dirty $VERSION_TYPE
 
@@ -24,4 +28,4 @@ echo "Version bumped from $CURRENT_VERSION to $NEW_VERSION"
 # Create git tag
 git tag -a "v$NEW_VERSION" -m "Release version $NEW_VERSION"
 
-echo "Created git tag v$NEW_VERSION" 
+echo "Created git tag v$NEW_VERSION"
