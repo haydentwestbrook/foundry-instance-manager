@@ -465,3 +465,17 @@ class FoundryInstanceManager:
                 raise
 
         return instances
+
+    def get_instance_path(self, name: str) -> Optional[Path]:
+        """Get the path to an instance's data directory.
+
+        Args:
+            name: The name of the instance.
+
+        Returns:
+            Path to the instance's data directory, or None if the instance doesn't exist.
+        """
+        instance_path = self.base_dir / name
+        if not instance_path.exists():
+            return None
+        return instance_path

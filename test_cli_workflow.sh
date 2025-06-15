@@ -14,6 +14,9 @@ ADMIN_KEY="testkey"
 SYSTEM_URL="https://example.com/system.zip"
 SYSTEM_ID="dnd5e"
 FOUNDRY_VERSION="13.345.0"
+WORLD_NAME="Test World"
+WORLD_SYSTEM="dnd5e"
+WORLD_DESCRIPTION="A test world for automated testing"
 
 # Helper to print and run commands
 echo_and_run() {
@@ -25,6 +28,8 @@ echo_and_run() {
 echo_and_run python -m foundry_manager.cli --help
 
 echo_and_run python -m foundry_manager.cli systems --help
+
+echo_and_run python -m foundry_manager.cli worlds --help
 
 # 2. Set base dir
 echo_and_run python -m foundry_manager.cli set-base-dir --base-dir "$BASE_DIR"
@@ -49,7 +54,29 @@ echo_and_run python -m foundry_manager.cli systems list-systems "$INSTANCE" || t
 # Remove system (will fail if not actually installed)
 echo_and_run python -m foundry_manager.cli systems remove-system "$INSTANCE" "$SYSTEM_ID" || true
 
+# 8. World management commands
+# Create a new world
+echo_and_run python -m foundry_manager.cli worlds create-world "$INSTANCE" "$WORLD_NAME" "$WORLD_SYSTEM" --description "$WORLD_DESCRIPTION"
+
+# List worlds
+echo_and_run python -m foundry_manager.cli worlds list-worlds "$INSTANCE"
+
+# Get world info
+echo_and_run python -m foundry_manager.cli worlds info-world "$INSTANCE" "test-world"
+
+# Create a backup
+echo_and_run python -m foundry_manager.cli worlds backup-world "$INSTANCE" "test-world"
+
+# Restore from backup (using the most recent backup)
+BACKUP_FILE=$(find "$BASE_DIR/$INSTANCE/backups/worlds" -name "test-world_*.zip" -type f -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2-)
+if [ -n "$BACKUP_FILE" ]; then
+    echo_and_run python -m foundry_manager.cli worlds restore-world "$INSTANCE" "$BACKUP_FILE"
+fi
+
+# Remove the world
+echo_and_run python -m foundry_manager.cli worlds remove-world "$INSTANCE" "test-world"
+
 # Cleanup
 echo "Cleaning up temporary HOME: $HOME"
 rm -rf "$temp_home"
-echo "Done." 
+echo "Done."
