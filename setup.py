@@ -1,4 +1,6 @@
-from setuptools import setup, find_packages
+"""Setup configuration for Foundry Instance Manager."""
+
+from setuptools import find_packages, setup
 
 setup(
     name="foundry-instance-manager",
@@ -26,4 +28,4 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.6",
-) 
+)

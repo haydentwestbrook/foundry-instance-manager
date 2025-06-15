@@ -1,17 +1,27 @@
-import pytest
+"""Tests for the instance record management functionality."""
+
 import json
 from pathlib import Path
-from foundry_manager.instance_record_manager import InstanceRecordManager, InstanceRecord
+
+import pytest
+
+from foundry_manager.instance_record_manager import (
+    InstanceRecord,
+    InstanceRecordManager,
+)
+
 
 @pytest.fixture
 def base_dir(tmp_path):
     """Create a temporary base directory for testing."""
     return tmp_path
 
+
 @pytest.fixture
 def record_manager(base_dir):
     """Create an instance record manager."""
     return InstanceRecordManager(base_dir=base_dir)
+
 
 @pytest.fixture
 def test_record():
@@ -21,12 +31,15 @@ def test_record():
         version="11.0.0",
         data_dir=Path("/test/data"),
         port=30000,
-        status="running"
+        status="running",
     )
 
-class TestRecordManagement:
+
+class TestInstanceRecordManager:
+    """Test suite for InstanceRecordManager class."""
+
     def test_add_record(self, record_manager, test_record):
-        """Test adding a record."""
+        """Test adding an instance record."""
         # Add record
         record_manager.add_record(test_record)
 
@@ -61,15 +74,15 @@ class TestRecordManagement:
                 version="11.0.0",
                 data_dir=Path("/test/data1"),
                 port=30000,
-                status="running"
+                status="running",
             ),
             InstanceRecord(
                 name="test-instance-2",
                 version="11.1.0",
                 data_dir=Path("/test/data2"),
                 port=30001,
-                status="stopped"
-            )
+                status="stopped",
+            ),
         ]
 
         # Add records
@@ -109,7 +122,7 @@ class TestRecordManagement:
         assert record.version == "11.1.0"
 
     def test_remove_record(self, record_manager, test_record):
-        """Test removing a record."""
+        """Test removing an instance record."""
         # Add record
         record_manager.add_record(test_record)
 
@@ -120,7 +133,18 @@ class TestRecordManagement:
         record = record_manager.get_record("test-instance")
         assert record is None
 
+
 class TestRecordPersistence:
+    """Test suite for record persistence functionality.
+
+    This class contains tests for the persistence of instance records between manager
+    instances. It tests both successful record persistence scenarios and error cases.
+
+    The tests cover:
+    - Persistence of records between manager instances
+    - Format of the record file
+    """
+
     def test_record_persistence(self, record_manager, test_record):
         """Test that records persist between manager instances."""
         # Add record
@@ -151,7 +175,19 @@ class TestRecordPersistence:
         assert record_data["port"] == test_record.port
         assert record_data["status"] == test_record.status
 
+
 class TestErrorHandling:
+    """Test suite for error handling functionality.
+
+    This class contains tests for the error handling functionality of the
+    InstanceRecordManager. It tests both successful error handling scenarios and
+    error cases.
+
+    The tests cover:
+    - Updating a non-existent record
+    - Removing a non-existent record
+    """
+
     def test_update_nonexistent_record(self, record_manager):
         """Test updating a non-existent record."""
         # Attempt to update status
@@ -175,7 +211,7 @@ class TestErrorHandling:
 
         # Corrupt the record file
         record_file = record_manager.base_dir / "instances.json"
-        with open(record_file, 'w') as f:
+        with open(record_file, "w") as f:
             f.write("invalid json")
 
         # Create new manager instance
@@ -183,4 +219,4 @@ class TestErrorHandling:
 
         # Verify manager handles corruption gracefully
         records = new_manager.get_all_records()
-        assert len(records) == 0  # Should start with empty records after corruption 
+        assert len(records) == 0  # Should start with empty records after corruption

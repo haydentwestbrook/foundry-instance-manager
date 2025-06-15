@@ -1,40 +1,50 @@
 #!/usr/bin/env python3
 
-import docker
-from rich.console import Console
-from rich.table import Table
-from pathlib import Path
-from typing import Optional, List, Dict
-import shutil
+"""Docker container management for Foundry VTT instances."""
+
 import logging
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import docker
 from docker.models.containers import Container
+from rich.console import Console
 
 console = Console()
 logger = logging.getLogger("foundry-manager")
 
+
 class DockerError(Exception):
     """Base exception for Docker-related errors."""
+
     pass
+
 
 class ContainerNotFoundError(DockerError):
     """Raised when a container is not found."""
+
     pass
+
 
 class ContainerOperationError(DockerError):
     """Raised when a container operation fails."""
+
     pass
 
+
 class DockerManager:
+    """Manages Docker containers for Foundry VTT instances."""
+
     def __init__(self, base_dir: Optional[Path] = None):
         """Initialize the Docker manager."""
         self.base_dir = base_dir or Path.cwd()
         self.containers_data_dir = self.base_dir / "containers"
         self.shared_data_dir = self.base_dir / "shared"
-        
+
         # Create necessary directories
         self.containers_data_dir.mkdir(parents=True, exist_ok=True)
         self.shared_data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         try:
             self.client = docker.from_env()
             logger.debug("Docker client initialized successfully")
@@ -49,35 +59,39 @@ class DockerManager:
             logger.debug(f"Found container: {name}")
             return container
         except (docker.errors.NotFound, Exception) as e:
-            logger.debug(f"Container not found: {name}")
+            logger.debug(f"Container not found: {name}", e)
             raise ContainerNotFoundError(f"Container '{name}' not found")
         except docker.errors.APIError as e:
             logger.error(f"Docker API error while getting container {name}: {e}")
             raise DockerError(f"Failed to get container: {str(e)}")
 
-    def create_container(self, name: str, image: str, environment: Optional[Dict[str, str]] = None, 
-                        port: Optional[int] = None, volumes: Optional[Dict[str, Dict]] = None,
-                        proxy_port: Optional[int] = None) -> Container:
+    def create_container(
+        self,
+        name: str,
+        image: str,
+        environment: Optional[Dict[str, str]] = None,
+        port: Optional[int] = None,
+        volumes: Optional[Dict[str, Dict]] = None,
+        proxy_port: Optional[int] = None,
+    ) -> Container:
         """Create a new Docker container."""
         try:
             # Set up port mappings
-            ports = {
-                '30000/tcp': port if port is not None else 30000
-            }
-            
+            ports = {"30000/tcp": port if port is not None else 30000}
+
             # Add proxy port if specified
             if proxy_port is not None:
-                ports['443/tcp'] = proxy_port
+                ports["443/tcp"] = proxy_port
 
             # Create container with environment variables
-            container = self.client.containers.run(
+            container = self.client.containers.run(  # type: ignore[call-overload]
                 image=image,
                 name=name,
                 detach=True,
                 ports=ports,
                 volumes=volumes or {},
                 environment=environment or {},
-                restart_policy={'Name': 'unless-stopped'}
+                restart_policy={"Name": "unless-stopped"},
             )
             logger.info(f"Container {name} created successfully")
             return container
@@ -142,9 +156,9 @@ class DockerManager:
             image = self.client.images.get("felddy/foundryvtt")
             versions = []
             for tag in image.tags:
-                if ':' in tag:
-                    version = tag.split(':')[1]
-                    versions.append({'version': version})
+                if ":" in tag:
+                    version = tag.split(":")[1]
+                    versions.append({"version": version})
             return versions
         except docker.errors.ImageNotFound:
             logger.error("Foundry VTT image not found")
@@ -158,28 +172,30 @@ class DockerManager:
         try:
             # Get the current container
             container = self.get_container(name)
-            
+
             # Stop the container
             container.stop()
-            
+
             # Get the container's configuration
             container_config = container.attrs
-            
+
             # Create a new container with the new version
             new_container = self.create_container(
                 name=name,
                 image=f"felddy/foundryvtt:{new_version}",
-                environment=container_config['Config']['Env'],
-                port=container_config['HostConfig']['PortBindings']['30000/tcp'][0]['HostPort'],
-                volumes=container_config['HostConfig']['Binds']
+                environment=container_config["Config"]["Env"],
+                port=container_config["HostConfig"]["PortBindings"]["30000/tcp"][0][
+                    "HostPort"
+                ],
+                volumes=container_config["HostConfig"]["Binds"],
             )
-            
+
             # Remove the old container
             container.remove()
-            
+
             logger.info(f"Container {name} migrated to version {new_version}")
             return new_container
-            
+
         except docker.errors.APIError as e:
             logger.error(f"Failed to migrate container {name}: {e}")
-            raise ContainerOperationError(f"Failed to migrate container: {str(e)}") 
+            raise ContainerOperationError(f"Failed to migrate container: {str(e)}")

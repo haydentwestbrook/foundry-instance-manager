@@ -1,5 +1,3 @@
-"""
-Foundry Instance Manager - A CLI tool for managing Docker containers
-"""
+"""Foundry Instance Manager package for managing Foundry VTT instances."""
 
-__version__ = "0.1.0" 
+__version__ = "0.1.0"

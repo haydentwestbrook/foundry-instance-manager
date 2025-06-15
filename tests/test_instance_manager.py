@@ -1,36 +1,63 @@
-import pytest
+"""Tests for the Foundry instance manager functionality."""
+
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from foundry_manager.foundry_instance_manager import FoundryInstanceManager, FoundryInstance
-from foundry_manager.docker_manager import ContainerNotFoundError
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from foundry_manager.foundry_instance_manager import (
+    FoundryInstance,
+    FoundryInstanceManager,
+)
 from foundry_manager.instance_record_manager import InstanceRecord
+
 
 @pytest.fixture
 def base_dir(tmp_path):
     """Create a temporary base directory for testing."""
     return tmp_path
 
+
 @pytest.fixture
 def mock_docker_manager():
     """Create a mock docker manager."""
-    with patch('foundry_manager.foundry_instance_manager.DockerManager') as mock:
+    with patch("foundry_manager.foundry_instance_manager.DockerManager") as mock:
         manager = mock.return_value
         yield manager
+
 
 @pytest.fixture
 def mock_record_manager():
     """Create a mock record manager."""
-    with patch('foundry_manager.foundry_instance_manager.InstanceRecordManager') as mock:
+    with patch(
+        "foundry_manager.foundry_instance_manager.InstanceRecordManager"
+    ) as mock:
         manager = mock.return_value
         yield manager
+
 
 @pytest.fixture
 def instance_manager(base_dir, mock_docker_manager, mock_record_manager):
     """Create an instance manager with mocked dependencies."""
     return FoundryInstanceManager(base_dir=base_dir)
 
+
 class TestInstanceCreation:
-    def test_create_instance_success(self, instance_manager, mock_docker_manager, mock_record_manager):
+    """Test suite for instance creation functionality.
+
+    This class contains tests for the instance creation functionality of the
+    FoundryInstanceManager. It tests both successful instance creation scenarios and
+    error cases.
+
+    The tests cover:
+    - Creating an instance with all parameters
+    - Creating an instance with existing container
+    - Cleanup on instance creation failure
+    """
+
+    def test_create_instance_success(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test successful instance creation."""
         # Mock container
         mock_container = MagicMock()
@@ -42,7 +69,7 @@ class TestInstanceCreation:
             name="test-instance",
             version="11.0.0",
             port=30000,
-            environment={"TEST_VAR": "test_value"}
+            environment={"TEST_VAR": "test_value"},
         )
 
         # Verify instance
@@ -55,36 +82,56 @@ class TestInstanceCreation:
         mock_docker_manager.create_container.assert_called_once()
         mock_record_manager.add_record.assert_called_once()
 
-    def test_create_instance_existing_container(self, instance_manager, mock_docker_manager, mock_record_manager):
+    def test_create_instance_existing_container(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test creating instance when container already exists."""
         # Mock existing container
         mock_container = MagicMock()
         mock_docker_manager.get_container.return_value = mock_container
 
         # Create instance
-        instance = instance_manager.create_instance(
-            name="test-instance",
-            version="11.0.0"
-        )
+        instance_manager.create_instance(name="test-instance", version="11.0.0")
 
         # Verify old container was removed
         mock_docker_manager.remove_container.assert_called_once_with("test-instance")
         mock_docker_manager.create_container.assert_called_once()
 
-    def test_create_instance_cleanup_on_error(self, instance_manager, mock_docker_manager, mock_record_manager):
+    def test_create_instance_cleanup_on_error(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test cleanup when instance creation fails."""
         # Mock container creation failure
-        mock_docker_manager.create_container.side_effect = Exception("Test error")
+        mock_docker_manager.create_container.side_effect = ValueError("Test error")
 
         # Attempt to create instance
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="Test error"):
             instance_manager.create_instance("test-instance")
 
         # Verify cleanup
         mock_docker_manager.remove_container.assert_called_once_with("test-instance")
 
+
 class TestInstanceManagement:
-    def test_get_instance(self, instance_manager, mock_docker_manager, mock_record_manager):
+    """Test suite for instance management functionality.
+
+    This class contains tests for the instance management functionality of the
+    FoundryInstanceManager. It tests both successful instance retrieval scenarios
+    and error cases.
+
+    The tests cover:
+    - Getting an existing instance
+    - Getting a non-existent instance
+    - Listing all instances
+    - Starting an instance
+    - Stopping an instance
+    - Removing an instance
+    - Migrating an instance to a new version
+    """
+
+    def test_get_instance(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test getting an instance."""
         # Mock record and container
         mock_record = InstanceRecord(
@@ -92,7 +139,7 @@ class TestInstanceManagement:
             version="11.0.0",
             data_dir=Path("/test/data"),
             port=30000,
-            status="running"
+            status="running",
         )
         mock_container = MagicMock()
         mock_record_manager.get_record.return_value = mock_record
@@ -106,7 +153,9 @@ class TestInstanceManagement:
         assert instance.version == "11.0.0"
         assert instance.container == mock_container
 
-    def test_list_instances(self, instance_manager, mock_docker_manager, mock_record_manager):
+    def test_list_instances(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test listing all instances."""
         # Mock records and containers
         mock_records = [
@@ -115,15 +164,15 @@ class TestInstanceManagement:
                 version="11.0.0",
                 data_dir=Path("/test/data1"),
                 port=30000,
-                status="running"
+                status="running",
             ),
             InstanceRecord(
                 name="test-instance-2",
                 version="11.1.0",
                 data_dir=Path("/test/data2"),
                 port=30001,
-                status="stopped"
-            )
+                status="stopped",
+            ),
         ]
         mock_container = MagicMock()
         mock_record_manager.get_all_records.return_value = mock_records
@@ -137,8 +186,23 @@ class TestInstanceManagement:
         assert instances[0].name == "test-instance-1"
         assert instances[1].name == "test-instance-2"
 
+
 class TestInstanceOperations:
-    def test_start_instance(self, instance_manager, mock_docker_manager, mock_record_manager):
+    """Test suite for instance operations functionality.
+
+    This class contains tests for the operations that can be performed on Foundry
+    instances. It tests both successful instance operations and error cases.
+
+    The tests cover:
+    - Starting an instance
+    - Stopping an instance
+    - Removing an instance
+    - Migrating an instance to a new version
+    """
+
+    def test_start_instance(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test starting an instance."""
         # Mock instance
         mock_instance = MagicMock(spec=FoundryInstance)
@@ -150,9 +214,13 @@ class TestInstanceOperations:
 
         # Verify operations
         mock_docker_manager.start_container.assert_called_once_with("test-instance")
-        mock_record_manager.update_status.assert_called_once_with("test-instance", "running")
+        mock_record_manager.update_status.assert_called_once_with(
+            "test-instance", "running"
+        )
 
-    def test_stop_instance(self, instance_manager, mock_docker_manager, mock_record_manager):
+    def test_stop_instance(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test stopping an instance."""
         # Mock instance
         mock_instance = MagicMock(spec=FoundryInstance)
@@ -164,9 +232,13 @@ class TestInstanceOperations:
 
         # Verify operations
         mock_docker_manager.stop_container.assert_called_once_with("test-instance")
-        mock_record_manager.update_status.assert_called_once_with("test-instance", "stopped")
+        mock_record_manager.update_status.assert_called_once_with(
+            "test-instance", "stopped"
+        )
 
-    def test_remove_instance(self, instance_manager, mock_docker_manager, mock_record_manager):
+    def test_remove_instance(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test removing an instance."""
         # Mock instance
         mock_instance = MagicMock(spec=FoundryInstance)
@@ -182,7 +254,9 @@ class TestInstanceOperations:
         mock_docker_manager.remove_container.assert_called_once_with("test-instance")
         mock_record_manager.remove_record.assert_called_once_with("test-instance")
 
-    def test_migrate_instance(self, instance_manager, mock_docker_manager, mock_record_manager):
+    def test_migrate_instance(
+        self, instance_manager, mock_docker_manager, mock_record_manager
+    ):
         """Test migrating an instance to a new version."""
         # Mock instance
         mock_instance = MagicMock(spec=FoundryInstance)
@@ -203,10 +277,27 @@ class TestInstanceOperations:
         mock_docker_manager.stop_container.assert_called_once_with("test-instance")
         mock_docker_manager.remove_container.assert_called_once_with("test-instance")
         mock_docker_manager.create_container.assert_called_once()
-        mock_record_manager.update_version.assert_called_once_with("test-instance", "11.1.0")
+        mock_record_manager.update_version.assert_called_once_with(
+            "test-instance", "11.1.0"
+        )
         mock_docker_manager.start_container.assert_called_once_with("test-instance")
 
+
 class TestErrorHandling:
+    """Test suite for error handling functionality.
+
+    This class contains tests for the error handling functionality of the
+    FoundryInstanceManager. It tests both successful error handling scenarios and
+    error cases.
+
+    The tests cover:
+    - Getting a non-existent instance
+    - Starting a non-existent instance
+    - Stopping a non-existent instance
+    - Removing a non-existent instance
+    - Migrating a non-existent instance
+    """
+
     def test_get_nonexistent_instance(self, instance_manager, mock_record_manager):
         """Test getting a non-existent instance."""
         mock_record_manager.get_record.return_value = None
@@ -235,4 +326,4 @@ class TestErrorHandling:
         """Test migrating a non-existent instance."""
         mock_record_manager.get_record.return_value = None
         with pytest.raises(ValueError, match="Instance nonexistent-instance not found"):
-            instance_manager.migrate_instance("nonexistent-instance", "11.1.0") 
+            instance_manager.migrate_instance("nonexistent-instance", "11.1.0")
