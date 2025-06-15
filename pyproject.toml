@@ -1,8 +1,11 @@
 [tool.poetry]
-name = "foundry-instance-manager"
+name = "foundry_manager"
 version = "0.1.0"
 description = "A tool to manage Foundry VTT instances"
 authors = ["Your Name <your.email@example.com>"]
+packages = [
+    { include = "foundry_manager" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.9"
