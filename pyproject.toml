@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "foundry_manager"
+name = "foundry_instance_manager"
 version = "0.1.0"
 description = "A tool to manage Foundry VTT instances"
 authors = ["Your Name <your.email@example.com>"]
