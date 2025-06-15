@@ -23,6 +23,8 @@ import logging
 from pathlib import Path
 
 import click
+from rich.console import Console
+from rich.table import Table
 
 from foundry_manager.cli_output import (
     print_error,
@@ -33,11 +35,15 @@ from foundry_manager.cli_output import (
     print_warning,
 )
 from foundry_manager.foundry_instance_manager import FoundryInstanceManager
+from foundry_manager.game_system_manager import GameSystemManager
+from foundry_manager.module_manager import ModuleManager
 
 logger = logging.getLogger("foundry-manager")
 
 # Constants
 CONFIG_FILE_NAME = ".fim"
+
+console = Console()
 
 
 def load_config():
@@ -237,7 +243,7 @@ def migrate(name, version):
 
 
 @cli.command()
-def list():
+def list_instances():
     """List all Foundry VTT instances and their status."""
     try:
         config = load_config()
@@ -345,6 +351,264 @@ def apply_config(config_file: str, save: bool):
     except Exception as e:
         print_error(f"Error applying config: {e}")
         raise click.Abort()
+
+
+@cli.group()
+def systems():
+    """Manage game systems for Foundry VTT instances."""
+    pass
+
+
+@systems.command()
+@click.argument("instance")
+def list_systems(instance):
+    """List all game systems installed in an instance."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        foundry_instance = manager.get_instance(instance)
+        if not foundry_instance:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        system_manager = GameSystemManager(foundry_instance.data_dir)
+        systems = system_manager.list_systems()
+
+        # Determine the active system from options.json
+        options_path = foundry_instance.data_dir / "Data" / "options.json"
+        active_system = None
+        if options_path.exists():
+            try:
+                with open(options_path) as f:
+                    options = json.load(f)
+                    active_system = options.get("system")
+            except Exception as e:
+                logger.warning(f"Could not read options.json: {e}")
+
+        if not systems:
+            print_info("No game systems installed")
+            return
+
+        # Create a table of systems
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("ID", style="cyan")
+        table.add_column("Title", style="green")
+        table.add_column("Version", style="yellow")
+
+        for system in systems:
+            title = system["title"]
+            if active_system and system["id"] == active_system:
+                title += " ★"
+            table.add_row(
+                system["id"],
+                title,
+                system["version"],
+            )
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to list game systems: {e}")
+        raise click.ClickException(f"Failed to list game systems: {str(e)}")
+
+
+@systems.command()
+@click.argument("instance")
+@click.argument("system_id")
+def info_system(instance, system_id):
+    """Get information about a specific game system."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        foundry_instance = manager.get_instance(instance)
+        if not foundry_instance:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        system_manager = GameSystemManager(foundry_instance.data_dir)
+        system_info = system_manager.get_system_info(system_id)
+
+        if not system_info:
+            raise click.ClickException(f"System {system_id} not found")
+
+        # Print system information
+        print_info(f"System: {system_info['title']}")
+        print_info(f"ID: {system_info['id']}")
+        print_info(f"Version: {system_info['version']}")
+        print_info(f"Path: {system_info['path']}")
+    except Exception as e:
+        logger.error(f"Failed to get system info: {e}")
+        raise click.ClickException(f"Failed to get system info: {str(e)}")
+
+
+@systems.command()
+@click.argument("instance")
+@click.argument("system_url")
+def install_system(instance, system_url):
+    """Install a game system from a URL."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        foundry_instance = manager.get_instance(instance)
+        if not foundry_instance:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        system_manager = GameSystemManager(foundry_instance.data_dir)
+        system_manager.install_system(system_url)
+        print_success("System installed successfully")
+    except Exception as e:
+        logger.error(f"Failed to install system: {e}")
+        raise click.ClickException(f"Failed to install system: {str(e)}")
+
+
+@systems.command()
+@click.argument("instance")
+@click.argument("system_id")
+def remove_system(instance, system_id):
+    """Remove a game system."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        foundry_instance = manager.get_instance(instance)
+        if not foundry_instance:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        system_manager = GameSystemManager(foundry_instance.data_dir)
+        system_manager.remove_system(system_id)
+        print_success(f"System {system_id} removed successfully")
+    except Exception as e:
+        logger.error(f"Failed to remove system: {e}")
+        raise click.ClickException(f"Failed to remove system: {str(e)}")
+
+
+@cli.group()
+def modules():
+    """Manage Foundry VTT modules."""
+    pass
+
+
+@modules.command()
+@click.argument("instance")
+def list_modules(instance):
+    """List all installed modules in an instance."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_info = manager.get_instance_info(instance)
+
+        if not instance_info:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        module_manager = ModuleManager(
+            manager.docker_client, instance, Path(config["base_dir"]) / instance
+        )
+
+        modules = module_manager.list_modules()
+
+        if not modules:
+            print_info("No modules installed")
+            return
+
+        table = Table(title=f"Modules in {instance}")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Version", style="yellow")
+        table.add_column("Author", style="blue")
+
+        for module in modules:
+            table.add_row(
+                module.get("id", ""),
+                module.get("title", ""),
+                module.get("version", ""),
+                module.get("author", ""),
+            )
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to list modules: {e}")
+        raise click.ClickException(f"Failed to list modules: {str(e)}")
+
+
+@modules.command()
+@click.argument("instance")
+@click.argument("module_id")
+def info_module(instance, module_id):
+    """Get information about a specific module."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_info = manager.get_instance_info(instance)
+
+        if not instance_info:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        module_manager = ModuleManager(
+            manager.docker_client, instance, Path(config["base_dir"]) / instance
+        )
+
+        module_info = module_manager.get_module_info(module_id)
+
+        if not module_info:
+            raise click.ClickException(f"Module {module_id} not found")
+
+        table = Table(title=f"Module Information: {module_id}")
+        table.add_column("Property", style="cyan")
+        table.add_column("Value", style="green")
+
+        for key, value in module_info.items():
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, indent=2)
+            table.add_row(key, str(value))
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to get module info: {e}")
+        raise click.ClickException(f"Failed to get module info: {str(e)}")
+
+
+@modules.command()
+@click.argument("instance")
+@click.argument("module_url")
+def install_module(instance, module_url):
+    """Install a module from a URL."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_info = manager.get_instance_info(instance)
+
+        if not instance_info:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        module_manager = ModuleManager(
+            manager.docker_client, instance, Path(config["base_dir"]) / instance
+        )
+
+        module_info = module_manager.install_module(module_url)
+        print_success(f"Module {module_info['id']} installed successfully")
+    except Exception as e:
+        logger.error(f"Failed to install module: {e}")
+        raise click.ClickException(f"Failed to install module: {str(e)}")
+
+
+@modules.command()
+@click.argument("instance")
+@click.argument("module_id")
+def remove_module(instance, module_id):
+    """Remove a module from an instance."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_info = manager.get_instance_info(instance)
+
+        if not instance_info:
+            raise click.ClickException(f"Instance {instance} not found")
+
+        module_manager = ModuleManager(
+            manager.docker_client, instance, Path(config["base_dir"]) / instance
+        )
+
+        module_manager.remove_module(module_id)
+        print_success(f"Module {module_id} removed successfully")
+    except Exception as e:
+        logger.error(f"Failed to remove module: {e}")
+        raise click.ClickException(f"Failed to remove module: {str(e)}")
 
 
 if __name__ == "__main__":

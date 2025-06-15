@@ -259,3 +259,77 @@ class TestErrorHandling:
             result = runner.invoke(cli, ["migrate", "nonexistent-instance", "11.1.0"])
             assert result.exit_code != 0
             assert "Instance nonexistent-instance not found" in result.output
+
+
+class TestSystemCommands:
+    """Test system management CLI commands."""
+
+    @pytest.fixture
+    def mock_system_manager(self):
+        """Create a mock GameSystemManager for testing."""
+        with patch("foundry_manager.cli.GameSystemManager") as mock:
+            manager = mock.return_value
+            yield manager
+
+    def test_systems_list(
+        self, runner, mock_instance_manager, mock_system_manager, mock_config_dir
+    ):
+        """Test listing installed game systems for an instance."""
+        mock_instance = MagicMock(spec=FoundryInstance)
+        mock_instance.name = "test-instance"
+        mock_instance.data_dir = Path("/test/data")
+        mock_instance_manager.get_instance.return_value = mock_instance
+        mock_system_manager.list_systems.return_value = [
+            {"id": "dnd5e", "title": "D&D 5E", "version": "5.0.3"},
+            {"id": "pf2e", "title": "Pathfinder 2E", "version": "7.2.0"},
+        ]
+        with patch(
+            "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG):
+            result = runner.invoke(cli, ["systems", "list", "test-instance"])
+            assert result.exit_code == 0
+            assert "dnd5e" in result.output
+            assert "Pathfinder 2E" in result.output
+            mock_system_manager.list_systems.assert_called_once()
+
+    def test_systems_install(
+        self, runner, mock_instance_manager, mock_system_manager, mock_config_dir
+    ):
+        """Test installing a game system from a URL."""
+        mock_instance = MagicMock(spec=FoundryInstance)
+        mock_instance.name = "test-instance"
+        mock_instance.data_dir = Path("/test/data")
+        mock_instance_manager.get_instance.return_value = mock_instance
+        with patch(
+            "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG):
+            result = runner.invoke(
+                cli,
+                [
+                    "systems",
+                    "install",
+                    "test-instance",
+                    "https://example.com/system.zip",
+                ],
+            )
+            assert result.exit_code == 0
+            assert "System installed successfully" in result.output
+            mock_system_manager.install_system.assert_called_once_with(
+                "https://example.com/system.zip"
+            )
+
+    def test_systems_remove(
+        self, runner, mock_instance_manager, mock_system_manager, mock_config_dir
+    ):
+        """Test removing a game system from an instance."""
+        mock_instance = MagicMock(spec=FoundryInstance)
+        mock_instance.name = "test-instance"
+        mock_instance.data_dir = Path("/test/data")
+        mock_instance_manager.get_instance.return_value = mock_instance
+        with patch(
+            "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG):
+            result = runner.invoke(cli, ["systems", "remove", "test-instance", "dnd5e"])
+            assert result.exit_code == 0
+            assert "✓ System dnd5e removed successfully" in result.output
+            mock_system_manager.remove_system.assert_called_once_with("dnd5e")
