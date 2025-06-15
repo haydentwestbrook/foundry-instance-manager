@@ -26,6 +26,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+# isort: off
 from foundry_manager.cli_output import (
     print_error,
     print_info,
@@ -34,9 +35,12 @@ from foundry_manager.cli_output import (
     print_versions_table,
     print_warning,
 )
+
+# isort: on
 from foundry_manager.foundry_instance_manager import FoundryInstanceManager
 from foundry_manager.game_system_manager import GameSystemManager
 from foundry_manager.module_manager import ModuleManager
+from foundry_manager.world_manager import WorldManager
 
 logger = logging.getLogger("foundry-manager")
 
@@ -609,6 +613,197 @@ def remove_module(instance, module_id):
     except Exception as e:
         logger.error(f"Failed to remove module: {e}")
         raise click.ClickException(f"Failed to remove module: {str(e)}")
+
+
+@cli.group()
+def worlds():
+    """Manage Foundry VTT worlds."""
+    pass
+
+
+@worlds.command()
+@click.argument("instance")
+def list_worlds(instance):
+    """List all worlds in a Foundry VTT instance."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_path = manager.get_instance_path(instance)
+
+        if not instance_path:
+            print_error(f"Instance {instance} not found")
+            return
+
+        world_manager = WorldManager(instance_path)
+        worlds = world_manager.list_worlds()
+
+        if not worlds:
+            print_info("No worlds found")
+            return
+
+        table = Table(title=f"Worlds in {instance}")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("System", style="yellow")
+        table.add_column("Core Version", style="blue")
+        table.add_column("System Version", style="magenta")
+        table.add_column("Last Modified", style="white")
+
+        for world in worlds:
+            table.add_row(
+                world["id"],
+                world["name"],
+                world["system"],
+                world["core_version"],
+                world["system_version"],
+                world["last_modified"],
+            )
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to list worlds: {e}")
+        raise click.ClickException(f"Failed to list worlds: {str(e)}")
+
+
+@worlds.command()
+@click.argument("instance")
+@click.argument("world_id")
+def info_world(instance, world_id):
+    """Get detailed information about a specific world."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_path = manager.get_instance_path(instance)
+
+        if not instance_path:
+            print_error(f"Instance {instance} not found")
+            return
+
+        world_manager = WorldManager(instance_path)
+        world_info = world_manager.get_world_info(world_id)
+
+        if not world_info:
+            print_error(f"World {world_id} not found")
+            return
+
+        table = Table(title=f"World Information: {world_info['name']}")
+        table.add_column("Property", style="cyan")
+        table.add_column("Value", style="green")
+
+        for key, value in world_info.items():
+            table.add_row(key.replace("_", " ").title(), str(value))
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to get world info: {e}")
+        raise click.ClickException(f"Failed to get world info: {str(e)}")
+
+
+@worlds.command()
+@click.argument("instance")
+@click.argument("name")
+@click.argument("system")
+@click.option("--description", help="World description")
+def create_world(instance, name, system, description):
+    """Create a new world in a Foundry VTT instance."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_path = manager.get_instance_path(instance)
+
+        if not instance_path:
+            print_error(f"Instance {instance} not found")
+            return
+
+        world_manager = WorldManager(instance_path)
+        world_id = world_manager.create_world(name, system, description)
+
+        if world_id:
+            print_success(f"World {name} created successfully with ID: {world_id}")
+        else:
+            print_error("Failed to create world")
+    except Exception as e:
+        logger.error(f"Failed to create world: {e}")
+        raise click.ClickException(f"Failed to create world: {str(e)}")
+
+
+@worlds.command()
+@click.argument("instance")
+@click.argument("world_id")
+@click.option("--backup-path", type=click.Path(), help="Path to store the backup")
+def backup_world(instance, world_id, backup_path):
+    """Create a backup of a world."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_path = manager.get_instance_path(instance)
+
+        if not instance_path:
+            print_error(f"Instance {instance} not found")
+            return
+
+        world_manager = WorldManager(instance_path)
+        backup_file = world_manager.backup_world(
+            world_id, Path(backup_path) if backup_path else None
+        )
+
+        if backup_file:
+            print_success(f"World backup created successfully at: {backup_file}")
+        else:
+            print_error("Failed to create world backup")
+    except Exception as e:
+        logger.error(f"Failed to backup world: {e}")
+        raise click.ClickException(f"Failed to backup world: {str(e)}")
+
+
+@worlds.command()
+@click.argument("instance")
+@click.argument("backup_path", type=click.Path(exists=True))
+def restore_world(instance, backup_path):
+    """Restore a world from a backup."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_path = manager.get_instance_path(instance)
+
+        if not instance_path:
+            print_error(f"Instance {instance} not found")
+            return
+
+        world_manager = WorldManager(instance_path)
+        world_id = world_manager.restore_world(Path(backup_path))
+
+        if world_id:
+            print_success(f"World restored successfully with ID: {world_id}")
+        else:
+            print_error("Failed to restore world")
+    except Exception as e:
+        logger.error(f"Failed to restore world: {e}")
+        raise click.ClickException(f"Failed to restore world: {str(e)}")
+
+
+@worlds.command()
+@click.argument("instance")
+@click.argument("world_id")
+def remove_world(instance, world_id):
+    """Remove a world from a Foundry VTT instance."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        instance_path = manager.get_instance_path(instance)
+
+        if not instance_path:
+            print_error(f"Instance {instance} not found")
+            return
+
+        world_manager = WorldManager(instance_path)
+        if world_manager.remove_world(world_id):
+            print_success(f"World {world_id} removed successfully")
+        else:
+            print_error(f"Failed to remove world {world_id}")
+    except Exception as e:
+        logger.error(f"Failed to remove world: {e}")
+        raise click.ClickException(f"Failed to remove world: {str(e)}")
 
 
 if __name__ == "__main__":
