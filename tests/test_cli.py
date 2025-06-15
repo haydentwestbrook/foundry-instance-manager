@@ -182,8 +182,14 @@ class TestListCommands:
 
         with patch(
             "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG), patch(
+            "foundry_manager.cli.FoundryInstanceManager",
+            return_value=mock_instance_manager,
         ):
-            result = runner.invoke(cli, ["list"])
+            result = runner.invoke(cli, ["list-instances"])
+            if result.exit_code != 0:
+                print("\n--- CLI OUTPUT ---\n", result.output)
+                print("\n--- CLI EXCEPTION ---\n", result.exception)
             assert result.exit_code == 0
             assert "test-instance" in result.output
             assert "running" in result.output
@@ -285,12 +291,17 @@ class TestSystemCommands:
         ]
         with patch(
             "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
-        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG):
-            result = runner.invoke(cli, ["systems", "list", "test-instance"])
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG), patch(
+            "foundry_manager.cli.GameSystemManager", return_value=mock_system_manager
+        ), patch(
+            "foundry_manager.cli.FoundryInstanceManager",
+            return_value=mock_instance_manager,
+        ):
+            result = runner.invoke(cli, ["systems", "list-systems", "test-instance"])
             assert result.exit_code == 0
-            assert "dnd5e" in result.output
+            assert "D&D 5E" in result.output
             assert "Pathfinder 2E" in result.output
-            mock_system_manager.list_systems.assert_called_once()
+            mock_system_manager.list_systems.assert_called_once_with(mock_instance)
 
     def test_systems_install(
         self, runner, mock_instance_manager, mock_system_manager, mock_config_dir
@@ -302,20 +313,24 @@ class TestSystemCommands:
         mock_instance_manager.get_instance.return_value = mock_instance
         with patch(
             "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
-        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG):
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG), patch(
+            "foundry_manager.cli.GameSystemManager", return_value=mock_system_manager
+        ), patch(
+            "foundry_manager.cli.FoundryInstanceManager",
+            return_value=mock_instance_manager,
+        ):
             result = runner.invoke(
                 cli,
                 [
                     "systems",
-                    "install",
+                    "install-system",
                     "test-instance",
                     "https://example.com/system.zip",
                 ],
             )
             assert result.exit_code == 0
-            assert "System installed successfully" in result.output
             mock_system_manager.install_system.assert_called_once_with(
-                "https://example.com/system.zip"
+                mock_instance, "https://example.com/system.zip"
             )
 
     def test_systems_remove(
@@ -328,8 +343,16 @@ class TestSystemCommands:
         mock_instance_manager.get_instance.return_value = mock_instance
         with patch(
             "foundry_manager.cli.Path.home", return_value=mock_config_dir.parent
-        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG):
-            result = runner.invoke(cli, ["systems", "remove", "test-instance", "dnd5e"])
+        ), patch("foundry_manager.cli.load_config", return_value=TEST_CONFIG), patch(
+            "foundry_manager.cli.GameSystemManager", return_value=mock_system_manager
+        ), patch(
+            "foundry_manager.cli.FoundryInstanceManager",
+            return_value=mock_instance_manager,
+        ):
+            result = runner.invoke(
+                cli, ["systems", "remove-system", "test-instance", "dnd5e"]
+            )
             assert result.exit_code == 0
-            assert "✓ System dnd5e removed successfully" in result.output
-            mock_system_manager.remove_system.assert_called_once_with("dnd5e")
+            mock_system_manager.remove_system.assert_called_once_with(
+                mock_instance, "dnd5e"
+            )

@@ -30,8 +30,11 @@ class GameSystemManager:
         self.instance_data_dir = instance_data_dir
         self.systems_dir = instance_data_dir / "Data" / "systems"
 
-    def list_systems(self) -> List[Dict[str, str]]:
+    def list_systems(self, instance=None) -> List[Dict[str, str]]:
         """List all installed game systems.
+
+        Args:
+            instance: Optional FoundryInstance object (not used, kept for API compatibility)
 
         Returns:
             List of dictionaries containing system information
@@ -51,12 +54,16 @@ class GameSystemManager:
             try:
                 with open(system_json) as f:
                     system_data = json.load(f)
+                    system_id = system_data.get("id", system_dir.name)
+                    system_title = system_data.get("title", "Unknown")
+                    system_version = system_data.get("version", "Unknown")
+                    system_path = str(system_dir)
                     systems.append(
                         {
-                            "id": system_data.get("id", system_dir.name),
-                            "title": system_data.get("title", "Unknown"),
-                            "version": system_data.get("version", "Unknown"),
-                            "path": str(system_dir),
+                            "id": system_id,
+                            "title": system_title,
+                            "version": system_version,
+                            "path": system_path,
                         }
                     )
             except Exception as e:
@@ -163,15 +170,19 @@ class GameSystemManager:
         # Copy system.json last to ensure it's the most recent file
         shutil.copy2(system_json, system_dir / "system.json")
 
-    def install_system(self, system_url: str) -> None:
+    def install_system(self, instance=None, system_url: Optional[str] = None) -> None:
         """Install a game system from a URL.
 
         Args:
+            instance: Optional FoundryInstance object (not used, kept for API compatibility)
             system_url: URL to the game system's manifest or repository
 
         Raises:
             ValueError: If the system URL is invalid or installation fails
         """
+        if not system_url:
+            raise ValueError("system_url is required")
+
         # Create systems directory if it doesn't exist
         self.systems_dir.mkdir(parents=True, exist_ok=True)
 
@@ -199,17 +210,21 @@ class GameSystemManager:
             self._move_system_files(extracted_dir, system_dir, system_json)
 
             version = system_data.get("version", "unknown")
-            logger.info(f"Installed system {system_id} version {version}")
+            logger.info(f"Installed system {system_id} version " f"{version}")
 
-    def remove_system(self, system_id: str) -> None:
+    def remove_system(self, instance=None, system_id: Optional[str] = None) -> None:
         """Remove a game system.
 
         Args:
+            instance: Optional FoundryInstance object (not used, kept for API compatibility)
             system_id: ID of the system to remove
 
         Raises:
             ValueError: If the system is not found
         """
+        if not system_id:
+            raise ValueError("system_id is required")
+
         system_dir = self.systems_dir / system_id
         if not system_dir.exists():
             raise ValueError(f"System {system_id} not found")

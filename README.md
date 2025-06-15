@@ -50,3 +50,39 @@ The tool uses the following directory structure:
 - Docker Python SDK
 - Click
 - Rich 
+
+## Development with Cursor
+
+Cursor is an AI-powered IDE that can help with development tasks. Here are some useful prompts you can use:
+
+### Code Quality
+
+- "Run flake8. For each issue found, understand the issue and surrounding code, explain the issue and your proposed solution, and finally implement your solution. Then rerun flake8 to verify the issue has been fixed. Repeat until all issues are fixed."
+- "Run mypy. For each type error found, understand the issue and surrounding code, explain the issue and your proposed solution, and finally implement your solution. Then rerun mypy to verify the issue has been fixed. Repeat until all issues are fixed."
+- "Run pytest. For each failing test, understand the failure and surrounding code, explain the issue and your proposed solution, and finally implement your solution. Then rerun pytest to verify the test passes. Repeat until all tests pass."
+
+### Code Generation
+
+- "Generate unit tests for the following function/class: [function/class name]"
+- "Add docstrings to all public methods in [file name]"
+- "Add type hints to all functions in [file name]"
+
+### Code Review
+
+- "Review the changes in [file name] and suggest improvements for code quality, performance, and maintainability"
+- "Check for potential security issues in [file name]"
+- "Suggest ways to improve error handling in [file name]"
+
+### Documentation
+
+- "Update the README.md with documentation for [feature/functionality]"
+- "Generate API documentation for [module/class]"
+- "Add inline comments to explain complex logic in [file name]"
+
+### Refactoring
+
+- "Refactor [function/class] to improve readability and maintainability"
+- "Extract common functionality into a shared utility module"
+- "Split [large function/class] into smaller, more focused components"
+
+Remember to be specific in your prompts and provide context when needed. Cursor works best when given clear instructions and relevant information about the task at hand. 

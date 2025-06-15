@@ -371,7 +371,7 @@ def list_systems(instance):
             raise click.ClickException(f"Instance {instance} not found")
 
         system_manager = GameSystemManager(foundry_instance.data_dir)
-        systems = system_manager.list_systems()
+        systems = system_manager.list_systems(foundry_instance)
 
         # Determine the active system from options.json
         options_path = foundry_instance.data_dir / "Data" / "options.json"
@@ -451,7 +451,7 @@ def install_system(instance, system_url):
             raise click.ClickException(f"Instance {instance} not found")
 
         system_manager = GameSystemManager(foundry_instance.data_dir)
-        system_manager.install_system(system_url)
+        system_manager.install_system(foundry_instance, system_url)
         print_success("System installed successfully")
     except Exception as e:
         logger.error(f"Failed to install system: {e}")
@@ -471,7 +471,7 @@ def remove_system(instance, system_id):
             raise click.ClickException(f"Instance {instance} not found")
 
         system_manager = GameSystemManager(foundry_instance.data_dir)
-        system_manager.remove_system(system_id)
+        system_manager.remove_system(foundry_instance, system_id)
         print_success(f"System {system_id} removed successfully")
     except Exception as e:
         logger.error(f"Failed to remove system: {e}")
