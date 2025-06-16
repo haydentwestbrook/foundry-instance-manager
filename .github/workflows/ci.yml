@@ -49,7 +49,18 @@ jobs:
     - name: Bump version
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
+        # Temporarily disable pre-commit hooks
+        git config --unset core.hooksPath
+        # Bump version
         poetry run bump2version patch
+        # Re-enable pre-commit hooks
+        git config core.hooksPath .git/hooks
+        # Run pre-commit hooks manually
+        pre-commit run --all-files
+        # Commit any changes from pre-commit hooks
+        git add .
+        git commit -m "Apply pre-commit fixes" || true
+        # Push changes
         git push
         git push --tags
 
