@@ -77,19 +77,21 @@ jobs:
         fi
         # Set output for next step
         echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+        # Set a flag to indicate we should run release steps
+        echo "should_release=true" >> $GITHUB_OUTPUT
 
     - name: Generate changelog
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
       run: |
         poetry run changelog
 
     - name: Build package
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
       run: |
         poetry build
 
     - name: Create GitHub release
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
       uses: softprops/action-gh-release@v1
       with:
         files: dist/*
@@ -98,7 +100,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Publish to PyPI
-      if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
       run: |
         poetry publish
       env:
