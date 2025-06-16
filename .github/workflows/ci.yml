@@ -60,11 +60,12 @@ jobs:
         poetry run bump2version patch
         # Re-enable pre-commit hooks
         git config core.hooksPath .git/hooks
-        # Run pre-commit hooks manually
-        pre-commit run --all-files
-        # Commit any changes from pre-commit hooks
+        # Run pre-commit hooks manually and allow them to modify files
+        pre-commit run --all-files || true
+        # Stage all changes including those from pre-commit hooks
         git add .
-        git commit -m "Apply pre-commit fixes" || true
+        # Commit all changes in one commit
+        git commit -m "Bump version and apply pre-commit fixes" || true
         # Push changes
         git push origin HEAD:main
         git push --tags
