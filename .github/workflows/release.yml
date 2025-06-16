@@ -9,7 +9,31 @@ on:
     branches: [main]
 
 jobs:
+  test-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+
+      - name: Install dependencies
+        run: |
+          poetry install
+
+      - name: Run CLI workflow tests
+        run: |
+          chmod +x ./scripts/test_cli_workflow.sh
+          ./scripts/test_cli_workflow.sh
+
   release:
+    needs: test-cli
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
