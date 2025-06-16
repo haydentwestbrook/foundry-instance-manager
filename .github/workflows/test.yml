@@ -26,6 +26,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install poetry
         poetry install
+        npm install -g git-changelog
 
     - name: Run tests
       run: |
