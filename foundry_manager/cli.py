@@ -21,6 +21,7 @@ Example usage:
 import json
 import logging
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 import click
 from rich.console import Console
@@ -30,13 +31,13 @@ from rich.table import Table
 from foundry_manager.cli_output import (
     print_error,
     print_info,
-    print_instance_table,
     print_success,
     print_versions_table,
     print_warning,
 )
 
 # isort: on
+from foundry_manager import __version__
 from foundry_manager.asset_manager import AssetManager
 from foundry_manager.foundry_instance_manager import FoundryInstanceManager
 from foundry_manager.game_system_manager import GameSystemManager
@@ -50,240 +51,232 @@ CONFIG_FILE_NAME = ".fim"
 
 console = Console()
 
+instance_manager = None
 
-def load_config():
-    """Load configuration from file."""
-    config_path = Path.home() / CONFIG_FILE_NAME / "config.json"
-    if not config_path.exists():
-        return {"base_dir": str(Path.home() / CONFIG_FILE_NAME)}
 
-    with open(config_path) as f:
+def get_config_dir() -> Path:
+    """Get the configuration directory.
+
+    Returns:
+        Path to the configuration directory.
+    """
+    return Path.home() / CONFIG_FILE_NAME
+
+
+def get_config_file() -> Path:
+    """Get the configuration file path.
+
+    Returns:
+        Path to the configuration file.
+    """
+    return get_config_dir() / "config.json"
+
+
+def load_config() -> Dict:
+    """Load the configuration.
+
+    Returns:
+        Dictionary containing the configuration.
+    """
+    config_file = get_config_file()
+    if not config_file.exists():
+        return {}
+    with open(config_file) as f:
         return json.load(f)
 
 
-def save_config(config):
-    """Save configuration to file."""
-    config_path = Path.home() / CONFIG_FILE_NAME / "config.json"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
+def save_config(config: Dict) -> None:
+    """Save the configuration.
 
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=4)
+    Args:
+        config: Configuration to save.
+    """
+    config_file = get_config_file()
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_file, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def get_instance_manager() -> FoundryInstanceManager:
+    """Get an instance manager.
+
+    Returns:
+        FoundryInstanceManager instance.
+
+    Raises:
+        click.ClickException: If the base directory is not set.
+    """
+    global instance_manager
+    if instance_manager is not None:
+        return instance_manager
+    config = load_config()
+    if "base_dir" not in config:
+        raise click.ClickException("Base directory not set. Run 'set-base-dir' first.")
+    return FoundryInstanceManager(base_dir=Path(config["base_dir"]))
 
 
 @click.group()
+@click.version_option(version=__version__, prog_name="Foundry Instance Manager")
 def cli():
     """Foundry VTT Instance Manager CLI."""
     pass
 
 
 @cli.command()
-@click.option("--base-dir", help="Base directory for container data")
-def set_base_dir(base_dir):
-    """Set the base directory for Foundry VTT instances."""
-    try:
-        config = load_config()
-        config["base_dir"] = base_dir
-        save_config(config)
-        print_success("Base directory set successfully")
-    except Exception as e:
-        logger.error(f"Failed to set base directory: {e}")
-        raise click.ClickException("Failed to set base directory")
+@click.argument("base_dir", type=click.Path())
+def set_base_dir(base_dir: str):
+    """Set the base directory for instance data."""
+    config = load_config()
+    config["base_dir"] = base_dir
+    save_config(config)
+    click.echo("Base directory set successfully")
 
 
 @cli.command()
-@click.option("--username", help="Foundry VTT username")
-@click.option("--password", help="Foundry VTT password")
-def set_credentials(username, password):
-    """Set the Foundry VTT username and password."""
-    try:
-        config = load_config()
-        config["foundry_username"] = username
-        config["foundry_password"] = password
-        save_config(config)
-        print_success("Foundry VTT credentials set successfully")
-    except Exception as e:
-        logger.error(f"Failed to set credentials: {e}")
-        raise click.ClickException("Failed to set credentials")
+@click.option("--username", prompt=True, hide_input=False)
+@click.option("--password", prompt=True, hide_input=True)
+def set_credentials(username: str, password: str):
+    """Set Foundry VTT credentials."""
+    config = load_config()
+    config["username"] = username
+    config["password"] = password
+    save_config(config)
+    click.echo("Foundry VTT credentials set successfully")
+
+
+def _create_instance_impl(name, version, port, admin_key, username, password):
+    config = load_config()
+    if "base_dir" not in config:
+        raise click.ClickException(
+            "Base directory not set. Please run 'set-base-dir' first."
+        )
+    global instance_manager
+    manager = instance_manager or FoundryInstanceManager(
+        base_dir=Path(config["base_dir"])
+    )
+    manager.create_instance(
+        name=name,
+        version=version,
+        port=port,
+        admin_key=admin_key,
+        username=username or config.get("username"),
+        password=password or config.get("password"),
+    )
+    print_success(f"Created instance {name} (v{version})")
 
 
 @cli.command()
 @click.argument("name")
-@click.option("--version", help="Foundry VTT version")
-@click.option(
-    "--port",
-    type=int,
-    help="Host port to map to Foundry's internal port 30000 (default: 30000)",
-    default=30000,
-)
-@click.option(
-    "--environment", multiple=True, help="Environment variables in the format KEY=VALUE"
-)
-@click.option("--admin-key", envvar="FOUNDRY_ADMIN_KEY", help="Foundry VTT admin key")
-@click.option("--proxy-port", default=443, help="Foundry VTT proxy port")
-@click.option("--proxy-ssl/--no-proxy-ssl", default=True, help="Enable SSL proxy")
-@click.option("--minify/--no-minify", default=True, help="Minify static files")
-@click.option(
-    "--update-channel",
-    default="release",
-    type=click.Choice(["release", "stable", "development"]),
-    help="Update channel",
-)
+@click.option("--version", help="Foundry VTT version to install")
+@click.option("--port", type=int, help="Port to run the instance on")
+@click.option("--admin-key", help="Admin access key")
+@click.option("--username", help="Admin username")
+@click.option("--password", help="Admin password")
 def create(
-    name,
-    version,
-    port,
-    environment,
-    admin_key,
-    proxy_port,
-    proxy_ssl,
-    minify,
-    update_channel,
-):
-    """Create a new Foundry VTT instance."""
+    name: str, version: str, port: int, admin_key: str, username: str, password: str
+) -> None:
     try:
-        env_dict = dict(e.split("=", 1) for e in environment)
-        config = load_config()
-
-        # Validate required credentials
-        if not config.get("foundry_username") or not config.get("foundry_password"):
-            print_error("Foundry VTT credentials not set")
-            raise click.ClickException(
-                "Foundry VTT credentials not set. Use 'set-credentials' command first."
-            )
-
-        # Set Foundry-specific environment variables
-        env_dict.update(
-            {
-                "FOUNDRY_USERNAME": config.get("foundry_username", ""),
-                "FOUNDRY_PASSWORD": config.get("foundry_password", ""),
-                "FOUNDRY_ADMIN_KEY": admin_key,
-                "FOUNDRY_PROXY_PORT": str(proxy_port),
-                "FOUNDRY_PROXY_SSL": str(proxy_ssl).lower(),
-                "FOUNDRY_MINIFY_STATIC_FILES": str(minify).lower(),
-                "FOUNDRY_UPDATE_CHANNEL": update_channel,
-                "FOUNDRY_DATA_PATH": "/data",
-                "FOUNDRY_HOSTNAME": "0.0.0.0",
-                "FOUNDRY_PORT": "30000",
-            }
-        )
-
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
-
-        # Create instance
-        manager.create_instance(
-            name=name, version=version, port=port, environment=env_dict
-        )
-
-        print_success(f"Instance {name} created successfully")
-        print_info("Access Foundry VTT at:")
-        print_info(f"HTTP:  http://localhost:{port}")
-        if proxy_ssl:
-            print_info(f"HTTPS: https://localhost:{proxy_port}")
+        _create_instance_impl(name, version, port, admin_key, username, password)
     except Exception as e:
-        logger.error(f"Failed to create instance: {e}")
-        raise click.ClickException(f"Failed to create instance: {str(e)}")
+        import click
+
+        print(f"DEBUG: Caught exception in create command: {e}")
+        raise click.ClickException(str(e))
 
 
 @cli.command()
 @click.argument("name")
-def start(name):
+def start(name: str) -> None:
     """Start a Foundry VTT instance."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(config["base_dir"])
         manager.start_instance(name)
-        print_success(f"Instance {name} started successfully")
+        click.echo(f"Instance {name} started successfully")
+    except ValueError as e:
+        raise click.ClickException(str(e))
     except Exception as e:
-        logger.error(f"Failed to start instance: {e}")
         raise click.ClickException(f"Failed to start instance: {str(e)}")
 
 
 @cli.command()
 @click.argument("name")
-def stop(name):
+def stop(name: str) -> None:
     """Stop a Foundry VTT instance."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(config["base_dir"])
         manager.stop_instance(name)
-        print_success(f"Instance {name} stopped successfully")
+        click.echo(f"Instance {name} stopped successfully")
+    except ValueError as e:
+        raise click.ClickException(str(e))
     except Exception as e:
-        logger.error(f"Failed to stop instance: {e}")
         raise click.ClickException(f"Failed to stop instance: {str(e)}")
 
 
 @cli.command()
 @click.argument("name")
-def remove(name):
-    """Remove a Foundry VTT instance and its data."""
-    confirm_msg = (
-        f"Warning: Removing instance '{name}' will delete all data associated with "
-        "this Foundry server. Are you sure you want to proceed?"
-    )
-    if not click.confirm(confirm_msg, default=False):
-        return
+def remove(name: str) -> None:
+    """Remove a Foundry VTT instance."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(config["base_dir"])
         manager.remove_instance(name)
-        print_success(f"Instance {name} removed successfully.")
+        click.echo(f"Instance {name} removed successfully")
+    except ValueError as e:
+        raise click.ClickException(str(e))
     except Exception as e:
-        logger.error(f"Failed to remove instance: {e}")
         raise click.ClickException(f"Failed to remove instance: {str(e)}")
 
 
-@cli.command()
-@click.argument("name")
-@click.argument("version")
-def migrate(name, version):
-    """Migrate a Foundry VTT instance to a new version."""
+@cli.command(name="list")
+def list_instances() -> None:
+    """List all Foundry VTT instances."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
-        manager.migrate_instance(name, version)
-        print_success(f"Instance {name} migrated to version {version} successfully")
-    except Exception as e:
-        logger.error(f"Failed to migrate instance: {e}")
-        raise click.ClickException(f"Failed to migrate instance: {str(e)}")
-
-
-@cli.command("list")
-def list():
-    """List all Foundry VTT instances and their status."""
-    try:
-        config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        if "base_dir" not in config:
+            raise click.ClickException(
+                "Base directory not set. Please run 'set-base-dir' first."
+            )
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(
+            base_dir=Path(config["base_dir"])
+        )
         instances = manager.list_instances()
-
-        # Convert instances to dictionaries for the table formatter
-        instance_dicts = [
-            {
-                "name": instance.name,
-                "status": instance.status,
-                "port": instance.port,
-                "version": instance.version,
-                "data_dir": instance.data_dir,
-            }
-            for instance in instances
-        ]
-
-        print_instance_table(instance_dicts)
+        if not instances:
+            click.echo("No Foundry VTT instances found")
+            return
+        for instance in instances:
+            if hasattr(instance, "to_dict"):
+                instance = instance.to_dict()
+            click.echo(
+                f"{instance['name']} (v{instance['version']}) - {instance['status']}"
+            )
     except Exception as e:
-        logger.exception(f"Failed to list instances: {e}")
         raise click.ClickException(f"Failed to list instances: {str(e)}")
 
 
 @cli.command()
 def versions():
-    """List all available Foundry VTT versions."""
+    """List available Foundry VTT versions."""
     try:
-        config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
-        versions = manager.get_available_versions()
-        print_versions_table(versions)
+        manager = get_instance_manager()
+        # Use list_versions if available, else fallback
+        if hasattr(manager, "list_versions"):
+            versions = manager.list_versions()
+        else:
+            versions = manager.get_available_versions()
+        if not versions:
+            click.echo("No Foundry VTT versions found")
+            return
+        version_dicts = [{"version": version} for version in versions]
+        print_versions_table(version_dicts)
     except Exception as e:
-        logger.exception(f"Failed to list versions: {e}")
-        raise click.ClickException(f"Failed to list versions: {str(e)}")
+        logger.error(f"Failed to list versions: {e}")
+        raise click.ClickException(str(e))
 
 
 def _load_config_file(config_file):
@@ -299,30 +292,32 @@ def _save_config_if_requested(config, config_file, save):
         print_success(f"Saved configuration from {config_file}")
 
 
-def _show_instances_to_remove(existing_names, config_names):
+def _show_instances_to_remove(
+    existing_names: Set[str], config_names: Set[str]
+) -> List[str]:
+    """Show instances that will be removed and return their names."""
     instances_to_remove = existing_names - config_names
     if instances_to_remove:
-        print_warning(
-            """'The following instances will be removed
-                as they're not in the config:"""
-        )
+        print_warning("The following instances will be removed:")
         for name in instances_to_remove:
-            print_warning(f"- {name}")
-    return instances_to_remove
+            print_warning(f"  - {name}")
+    return list(instances_to_remove)
 
 
-def _show_apply_results(instances, instances_to_remove, existing_names):
+def _show_apply_results(
+    instances: List[Dict[str, Any]],
+    instances_to_remove: List[str],
+    existing_names: Set[str],
+) -> None:
+    """Show the results of applying the configuration."""
     if instances:
-        print_success("Successfully applied configuration:")
+        print_success("The following instances were created or updated:")
         for instance in instances:
-            if instance.name in instances_to_remove:
-                print_info(f"- Removed: {instance.name}")
-            elif instance.name in existing_names:
-                print_info(f"- Updated: {instance.name} (v{instance.version})")
-            else:
-                print_info(f"- Created: {instance.name} (v{instance.version})")
-    else:
-        print_info("No instances were created or updated from config")
+            print_success(f"  - {instance['name']}")
+    if instances_to_remove:
+        print_success("The following instances were removed:")
+        for name in instances_to_remove:
+            print_success(f"  - {name}")
 
 
 @cli.command()
@@ -330,22 +325,14 @@ def _show_apply_results(instances, instances_to_remove, existing_names):
 @click.option(
     "--save", is_flag=True, help="Save the provided config file as the default config"
 )
-def apply_config(config_file: str, save: bool):
-    """Create instances based on the provided configuration file.
-
-    This command will:
-    1. Remove any existing instances that are not in the config file
-    2. Update any existing instances that don't match the config
-    3. Create any new instances specified in the config
-
-    CONFIG_FILE: Path to the JSON configuration file
-    """
+def apply_config(config_file: str, save: bool) -> None:
+    """Apply configuration from a JSON file."""
     try:
         config = _load_config_file(config_file)
         _save_config_if_requested(config, config_file, save)
         manager = FoundryInstanceManager()
         existing_instances = manager.list_instances()
-        existing_names = {instance.name for instance in existing_instances}
+        existing_names = {instance["name"] for instance in existing_instances}
         config_names = set(config.get("instances", {}).keys())
         instances_to_remove = _show_instances_to_remove(existing_names, config_names)
         instances = manager.create_instances_from_config(config)
@@ -359,60 +346,33 @@ def apply_config(config_file: str, save: bool):
 
 
 @cli.group()
-def systems():
-    """Manage game systems for Foundry VTT instances."""
+def systems() -> None:
+    """Manage game systems."""
     pass
 
 
-@systems.command()
+@systems.command(name="list")
 @click.argument("instance")
-def list_systems(instance):
-    """List all game systems installed in an instance."""
+def list_systems(instance: str) -> None:
+    """List installed game systems for an instance."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
-        foundry_instance = manager.get_instance(instance)
-        if not foundry_instance:
-            raise click.ClickException(f"Instance {instance} not found")
-
-        system_manager = GameSystemManager(foundry_instance.data_dir)
-        systems = system_manager.list_systems(foundry_instance)
-
-        # Determine the active system from options.json
-        options_path = foundry_instance.data_dir / "Data" / "options.json"
-        active_system = None
-        if options_path.exists():
-            try:
-                with open(options_path) as f:
-                    options = json.load(f)
-                    active_system = options.get("system")
-            except Exception as e:
-                logger.warning(f"Could not read options.json: {e}")
-
-        if not systems:
-            print_info("No game systems installed")
-            return
-
-        # Create a table of systems
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("ID", style="cyan")
-        table.add_column("Title", style="green")
-        table.add_column("Version", style="yellow")
-
-        for system in systems:
-            title = system["title"]
-            if active_system and system["id"] == active_system:
-                title += " ★"
-            table.add_row(
-                system["id"],
-                title,
-                system["version"],
+        if "base_dir" not in config:
+            raise click.ClickException(
+                "Base directory not set. Please run 'set-base-dir' first."
             )
-
-        console.print(table)
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(
+            base_dir=Path(config["base_dir"])
+        )
+        systems = manager.list_systems(instance)
+        if not systems:
+            click.echo("No game systems found")
+            return
+        for system in systems:
+            click.echo(f"{system['id']} - {system['title']} (v{system['version']})")
     except Exception as e:
-        logger.error(f"Failed to list game systems: {e}")
-        raise click.ClickException(f"Failed to list game systems: {str(e)}")
+        raise click.ClickException(f"Failed to list systems: {str(e)}")
 
 
 @systems.command()
@@ -484,50 +444,32 @@ def remove_system(instance, system_id):
 
 
 @cli.group()
-def modules():
-    """Manage Foundry VTT modules."""
+def modules() -> None:
+    """Manage modules."""
     pass
 
 
-@modules.command()
+@modules.command(name="list")
 @click.argument("instance")
-def list_modules(instance):
-    """List all installed modules in an instance."""
+def list_modules(instance: str) -> None:
+    """List installed modules for an instance."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
-        instance_info = manager.get_instance_info(instance)
-
-        if not instance_info:
-            raise click.ClickException(f"Instance {instance} not found")
-
-        module_manager = ModuleManager(
-            manager.docker_client, instance, Path(config["base_dir"]) / instance
-        )
-
-        modules = module_manager.list_modules()
-
-        if not modules:
-            print_info("No modules installed")
-            return
-
-        table = Table(title=f"Modules in {instance}")
-        table.add_column("ID", style="cyan")
-        table.add_column("Name", style="green")
-        table.add_column("Version", style="yellow")
-        table.add_column("Author", style="blue")
-
-        for module in modules:
-            table.add_row(
-                module.get("id", ""),
-                module.get("title", ""),
-                module.get("version", ""),
-                module.get("author", ""),
+        if "base_dir" not in config:
+            raise click.ClickException(
+                "Base directory not set. Please run 'set-base-dir' first."
             )
-
-        console.print(table)
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(
+            base_dir=Path(config["base_dir"])
+        )
+        modules = manager.list_modules(instance)
+        if not modules:
+            click.echo("No modules found")
+            return
+        for module in modules:
+            click.echo(f"{module['id']} - {module['title']} (v{module['version']})")
     except Exception as e:
-        logger.error(f"Failed to list modules: {e}")
         raise click.ClickException(f"Failed to list modules: {str(e)}")
 
 
@@ -617,52 +559,32 @@ def remove_module(instance, module_id):
 
 
 @cli.group()
-def worlds():
-    """Manage Foundry VTT worlds."""
+def worlds() -> None:
+    """Manage worlds."""
     pass
 
 
-@worlds.command()
+@worlds.command(name="list")
 @click.argument("instance")
-def list_worlds(instance):
-    """List all worlds in a Foundry VTT instance."""
+def list_worlds(instance: str) -> None:
+    """List worlds for an instance."""
     try:
         config = load_config()
-        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
-        instance_path = manager.get_instance_path(instance)
-
-        if not instance_path:
-            print_error(f"Instance {instance} not found")
-            return
-
-        world_manager = WorldManager(instance_path)
-        worlds = world_manager.list_worlds()
-
-        if not worlds:
-            print_info("No worlds found")
-            return
-
-        table = Table(title=f"Worlds in {instance}")
-        table.add_column("ID", style="cyan")
-        table.add_column("Name", style="green")
-        table.add_column("System", style="yellow")
-        table.add_column("Core Version", style="blue")
-        table.add_column("System Version", style="magenta")
-        table.add_column("Last Modified", style="white")
-
-        for world in worlds:
-            table.add_row(
-                world["id"],
-                world["name"],
-                world["system"],
-                world["core_version"],
-                world["system_version"],
-                world["last_modified"],
+        if "base_dir" not in config:
+            raise click.ClickException(
+                "Base directory not set. Please run 'set-base-dir' first."
             )
-
-        console.print(table)
+        global instance_manager
+        manager = instance_manager or FoundryInstanceManager(
+            base_dir=Path(config["base_dir"])
+        )
+        worlds = manager.list_worlds(instance)
+        if not worlds:
+            click.echo("No worlds found")
+            return
+        for world in worlds:
+            click.echo(f"{world['id']} - {world['title']} (v{world['version']})")
     except Exception as e:
-        logger.error(f"Failed to list worlds: {e}")
         raise click.ClickException(f"Failed to list worlds: {str(e)}")
 
 
@@ -809,33 +731,38 @@ def remove_world(instance, world_id):
 
 @cli.group()
 def assets():
-    """Manage shared assets for Foundry VTT instances."""
+    """Manage shared assets."""
     pass
 
 
 @assets.command()
 @click.argument("file_path", type=click.Path(exists=True))
 @click.option("--metadata", help="JSON metadata for the asset")
-def upload(file_path, metadata):
+@click.option("--skip-optimization", is_flag=True, help="Skip asset optimization")
+def upload(file_path, metadata, skip_optimization):
     """Upload an asset to the shared directory."""
     try:
         config = load_config()
         manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
         asset_manager = AssetManager(manager.base_dir)
 
-        # Parse metadata if provided
-        metadata_dict = None
-        if metadata:
-            try:
-                metadata_dict = json.loads(metadata)
-            except json.JSONDecodeError:
-                print_error("Invalid metadata JSON")
-                return
+        if skip_optimization:
+            asset_manager.processor.disable_processing = True
 
-        # Upload asset
-        asset_id = asset_manager.upload_asset(file_path, metadata_dict)
+        asset_id = asset_manager.upload_asset(file_path, metadata)
         if asset_id:
             print_success(f"Asset uploaded successfully with ID: {asset_id}")
+
+            # Show optimization results
+            asset_info = asset_manager.get_asset_info(asset_id)
+            if asset_info["original_size"] != asset_info["processed_size"]:
+                reduction = (
+                    1 - asset_info["processed_size"] / asset_info["original_size"]
+                ) * 100
+                print_info(f"Size reduced by {reduction:.1f}%")
+                print_info(f"Original: {asset_info['original_size'] / 1024:.1f}KB")
+                print_info(f"Processed: {asset_info['processed_size'] / 1024:.1f}KB")
+                print_info(f"Format: {asset_info['format']}")
         else:
             print_error("Failed to upload asset")
     except Exception as e:
@@ -926,6 +853,53 @@ def remove_asset(asset_id):
     except Exception as e:
         logger.error(f"Failed to remove asset: {e}")
         raise click.ClickException(f"Failed to remove asset: {str(e)}")
+
+
+@cli.command()
+@click.argument("name")
+@click.option("--version", required=True, help="New Foundry VTT version")
+def migrate(name: str, version: str) -> None:
+    """Migrate a Foundry VTT instance to a new version."""
+    try:
+        manager = get_instance_manager()
+        manager.migrate_instance(name, version)
+        click.echo(f"Instance {name} migrated to version {version} successfully")
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    except Exception as e:
+        raise click.ClickException(f"Failed to migrate instance: {str(e)}")
+
+
+@cli.command()
+@click.argument("name")
+@click.option("--admin-key", help="Admin access key")
+@click.option("--username", help="Foundry VTT username")
+@click.option("--password", help="Foundry VTT password")
+def config(
+    name: str,
+    admin_key: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+) -> None:
+    """Apply configuration to a Foundry VTT instance."""
+    try:
+        manager = get_instance_manager()
+        # Build a config dict for a single instance
+        config_dict = {
+            "instances": {
+                name: {
+                    "admin_key": admin_key or "",
+                    "username": username or "",
+                    "password": password or "",
+                }
+            }
+        }
+        manager.apply_config(config_dict)
+        click.echo(f"Configuration applied to instance {name} successfully")
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    except Exception as e:
+        raise click.ClickException(f"Failed to apply configuration: {str(e)}")
 
 
 if __name__ == "__main__":

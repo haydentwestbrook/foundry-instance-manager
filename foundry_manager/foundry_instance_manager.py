@@ -1,486 +1,517 @@
-"""Core functionality for managing Foundry VTT instances and their Docker containers."""
+"""Foundry VTT instance manager module.
 
+This module provides functionality for managing Foundry VTT instances using Docker.
+"""
+
+import json
 import logging
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from docker.models.containers import Container
+import docker
 
-from .docker_manager import ContainerNotFoundError, DockerManager
-from .instance_record_manager import InstanceRecord, InstanceRecordManager
+from foundry_manager.config import get_base_dir
 
-logger = logging.getLogger("foundry-manager")
+from .game_system_manager import GameSystemManager
+from .module_manager import ModuleManager
+from .world_manager import WorldManager
+
+logger = logging.getLogger(__name__)
 
 
+@dataclass
 class FoundryInstance:
     """Represents a Foundry VTT instance."""
 
-    def __init__(
-        self, name: str, version: str, data_dir: Path, port: int, container=None
-    ):
-        """Initialize a Foundry VTT instance.
+    name: str
+    version: str
+    port: int
+    data_dir: Path
+    status: str
+    container: Optional[docker.models.containers.Container] = None
+    admin_key: Optional[str] = None
+    environment: Optional[Dict[str, str]] = None
 
-        Args:
-            name: The name of the instance
-            version: The Foundry VTT version
-            data_dir: The directory where instance data will be stored
-            port: The port the instance will run on
-            container: Optional Docker container associated with this instance
-        """
-        self.name = name
-        self.version = version
-        self.data_dir = data_dir
-        self.port = port
-        self._container = container
+    def is_running(self) -> bool:
+        """Check if the instance is running."""
+        return self.status == "running"
 
-    @property
-    def container(self) -> Optional[Container]:
-        """Get the container associated with this instance."""
-        return self._container
+    def to_dict(self) -> Dict:
+        """Convert instance to dictionary."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "port": self.port,
+            "data_dir": str(self.data_dir),
+            "status": self.status,
+            "admin_key": self.admin_key,
+            "environment": self.environment,
+        }
 
-    @container.setter
-    def container(self, value):
-        """Set the container associated with this instance."""
-        self._container = value
-
-    @property
-    def status(self) -> str:
-        """Get the current status of the instance."""
-        if not self._container:
-            return "unknown"
-
-        container_status = self._container.status
-        if container_status == "running":
-            # Check if container is healthy
-            health = self._container.attrs.get("State", {}).get("Health", {})
-            if health and health.get("Status") == "starting":
-                return "starting"
-            return "running"
-        return container_status
+    @classmethod
+    def from_dict(cls, data: Dict) -> "FoundryInstance":
+        """Create instance from dictionary."""
+        return cls(
+            name=data["name"],
+            version=data["version"],
+            port=data["port"],
+            data_dir=Path(data["data_dir"]),
+            status=data["status"],
+            admin_key=data.get("admin_key"),
+            environment=data.get("environment"),
+        )
 
 
 class FoundryInstanceManager:
-    """Manages Foundry VTT instances."""
+    """Manages Foundry VTT instances using Docker."""
 
-    def __init__(self, base_dir: Optional[Path] = None):
-        """Initialize the Foundry instance manager.
+    def __init__(self, base_dir: Optional[Path] = None, docker_client=None):
+        """Initialize the Foundry VTT instance manager.
 
         Args:
-            base_dir: Optional base directory for instance data.
-            Defaults to current directory.
+            base_dir: Base directory for instance data. If not provided,
+                     uses the default from config.
+            docker_client: Optional Docker client for testing/mocking.
         """
-        self.base_dir = base_dir or Path.cwd()
-        self.docker_manager = DockerManager(self.base_dir)
-        self.record_manager = InstanceRecordManager(self.base_dir)
+        self.base_dir = Path(base_dir) if base_dir is not None else get_base_dir()
+        self.docker = docker_client or docker.from_env()
+        self.client = self.docker  # For backward compatibility
+        self.instances_dir = self.base_dir / "instances"
+        self.instances_dir.mkdir(parents=True, exist_ok=True)
 
-    def _cleanup_existing_container(self, name: str) -> None:
-        """Clean up any existing container with the given name.
-
-        Args:
-            name: Name of the container to clean up
-        """
-        try:
-            existing_container = self.docker_manager.get_container(name)
-            if existing_container:
-                logger.info(f"Removing existing container {name}")
-                self.docker_manager.remove_container(name)
-        except ContainerNotFoundError:
-            pass  # Container doesn't exist, which is what we want
-
-    def _get_version(self, version: Optional[str] = None) -> str:
-        """Get the Foundry VTT version to use.
-
-        Args:
-            version: Optional specific version to use
-
-        Returns:
-            Version string to use
+    def _check_docker(self) -> None:
+        """Check if Docker is available and running.
 
         Raises:
-            ValueError: If no versions are available
+            RuntimeError: If Docker is not available or not running.
         """
-        if version:
-            return version
+        if self.client is None:
+            raise RuntimeError("Docker is not available")
+        try:
+            self.client.ping()
+        except Exception as e:
+            raise RuntimeError(f"Docker is not running: {e}")
 
-        versions = self.get_available_versions()
-        if not versions:
-            raise ValueError("No Foundry VTT versions available")
-        return versions[0]["version"]  # Use the first available version
-
-    def _setup_data_directory(self, data_dir: Path) -> None:
-        """Set up the data directory for an instance.
+    def _get_instance_path(self, instance_name: str) -> Path:
+        """Get the path for an instance's data directory.
 
         Args:
-            data_dir: Path to the data directory
-        """
-        data_dir.mkdir(parents=True, exist_ok=True)
-
-    def _get_proxy_port(
-        self, environment: Optional[Dict[str, str]] = None
-    ) -> Optional[int]:  # noqa: E501
-        """Get the proxy port from environment variables if SSL is enabled.
-
-        Args:
-            environment: Optional environment variables dictionary
+            instance_name: Name of the instance.
 
         Returns:
-            Proxy port if SSL is enabled, None otherwise
+            Path to the instance's data directory.
         """
-        if environment and environment.get("FOUNDRY_PROXY_SSL", "").lower() == "true":
-            return int(environment.get("FOUNDRY_PROXY_PORT", "443"))
-        return None
+        return self.instances_dir / instance_name
 
-    def _cleanup_on_error(
-        self, name: str, data_dir: Path, container: Optional[Container] = None
-    ) -> None:  # noqa: E501
-        """Clean up resources if instance creation fails.
+    def _get_instance_config_path(self, instance_name: str) -> Path:
+        """Get the path for an instance's configuration file.
 
         Args:
-            name: Name of the instance
-            data_dir: Path to the data directory
-            container: Optional container to clean up
-        """
-        if container:
-            try:
-                self.docker_manager.remove_container(name)
-            except Exception as cleanup_error:
-                logger.error(
-                    f"Failed to clean up container after error: {cleanup_error}"
-                )  # noqa: E501
+            instance_name: Name of the instance.
 
-        if data_dir.exists():
-            try:
-                for item in data_dir.iterdir():
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        item.rmdir()
-                data_dir.rmdir()
-            except Exception:
-                logger.error("Failed to clean up data directory after error")
+        Returns:
+            Path to the instance's configuration file.
+        """
+        return self._get_instance_path(instance_name) / "config.json"
+
+    def _load_instance_config(self, instance_name: str) -> Dict:
+        """Load an instance's configuration.
+
+        Args:
+            instance_name: Name of the instance.
+
+        Returns:
+            Dictionary containing the instance's configuration.
+
+        Raises:
+            FileNotFoundError: If the instance configuration file doesn't exist.
+        """
+        config_path = self._get_instance_config_path(instance_name)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Instance {instance_name} not found")
+        with open(config_path) as f:
+            return json.load(f)
+
+    def _save_instance_config(self, instance_name: str, config: Dict) -> None:
+        """Save an instance's configuration.
+
+        Args:
+            instance_name: Name of the instance.
+            config: Configuration to save.
+        """
+        config_path = self._get_instance_config_path(instance_name)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+    def _get_instance_paths(self) -> List[Path]:
+        """Get paths to all instance directories.
+
+        Returns:
+            List of paths to instance directories.
+        """
+        return [p for p in self.instances_dir.iterdir() if p.is_dir()]
 
     def create_instance(
         self,
         name: str,
-        version: Optional[str] = None,
-        port: int = 30000,
-        environment: Optional[Dict[str, str]] = None,
-    ) -> FoundryInstance:
+        version: str,
+        port: int,
+        admin_key: str,
+        username: str,
+        password: str,
+    ) -> None:
         """Create a new Foundry VTT instance.
 
         Args:
-            name: Name of the instance
-            version: Foundry VTT version to use. If None, uses latest available version.
-            port: Port to expose the instance on
-            environment: Optional environment variables for the container
-
-        Returns:
-            Created FoundryInstance object
+            name: Name for the new instance.
+            version: Foundry VTT version to use.
+            port: Port to run the instance on.
+            admin_key: Admin key for the instance.
+            username: Foundry VTT username.
+            password: Foundry VTT password.
 
         Raises:
-            ValueError: If no versions are available or instance creation fails
+            ValueError: If an instance with the given name already exists.
+            RuntimeError: If the instance fails to be created.
         """
-        container = None
-        data_dir = self.base_dir / name
-        shared_assets_dir = self.base_dir / "shared_assets"
-
+        instance_path = None
         try:
-            # Clean up any existing container
-            self._cleanup_existing_container(name)
+            # Check if instance already exists
+            if self._get_instance_config_path(name).exists():
+                raise ValueError(f"Instance {name} already exists")
 
-            # Get version to use
-            version = self._get_version(version)
+            # Create instance directory
+            instance_path = self._get_instance_path(name)
+            instance_path.mkdir(parents=True, exist_ok=True)
 
-            # Set up data directory
-            self._setup_data_directory(data_dir)
+            # Create Docker container
+            container = self.docker.containers.run(
+                f"felddy/foundryvtt:{version}",
+                name=f"foundry-{name}",
+                detach=True,
+                ports={f"{port}/tcp": port},
+                volumes={str(instance_path): {"bind": "/data", "mode": "rw"}},
+                environment={
+                    "FOUNDRY_USERNAME": username,
+                    "FOUNDRY_PASSWORD": password,
+                    "FOUNDRY_ADMIN_KEY": admin_key,
+                },
+            )
 
-            # Get proxy port if SSL is enabled
-            proxy_port = self._get_proxy_port(environment)
-
-            # Set up volumes
-            volumes = {
-                str(data_dir): {"bind": "/data", "mode": "rw"},
-                str(shared_assets_dir): {"bind": "/data/shared_assets", "mode": "ro"},
+            # Save instance configuration
+            config = {
+                "name": name,
+                "version": version,
+                "port": port,
+                "data_dir": str(instance_path),
+                "status": "created",
+                "admin_key": admin_key,
+                "username": username,
+                "password": password,
             }
+            self._save_instance_config(name, config)
 
-            # Create container
-            container = self.docker_manager.create_container(
-                name=name,
-                image=f"felddy/foundryvtt:{version}",
-                volumes=volumes,
-                environment=environment or {},
-                port=port,
-                proxy_port=proxy_port,
-            )
-
-            # Create instance
-            instance = FoundryInstance(
-                name=name,
-                version=version,
-                data_dir=data_dir,
-                port=port,
-                container=container,
-            )
-
-            # Save instance record
-            self.record_manager.add_record(
-                InstanceRecord(
-                    name=name,
-                    version=version,
-                    data_dir=data_dir,
-                    port=port,
-                    status="created",
-                )
-            )
-
-            return instance
         except Exception as e:
-            self._cleanup_on_error(name, data_dir, container)
-            raise ValueError(f"Failed to create instance: {str(e)}")
-
-    def get_instance(self, name: str) -> Optional[FoundryInstance]:
-        """Get a Foundry instance by name.
-
-        Args:
-            name: Name of the instance to get
-
-        Returns:
-            FoundryInstance object if found, None otherwise
-        """
-        # Get record
-        record = self.record_manager.get_record(name)
-        if not record:
-            return None
-
-        # Get container
-        container = self.docker_manager.get_container(name)
-
-        return FoundryInstance(
-            name=name,
-            version=record.version,
-            data_dir=record.data_dir,
-            port=record.port,
-            container=container,
-        )
-
-    def list_instances(self) -> List[FoundryInstance]:
-        """List all Foundry instances.
-
-        Returns:
-            List of FoundryInstance objects
-        """
-        instances = []
-        for record in self.record_manager.get_all_records():
-            container = self.docker_manager.get_container(record.name)
-            instances.append(
-                FoundryInstance(
-                    name=record.name,
-                    version=record.version,
-                    data_dir=record.data_dir,
-                    port=record.port,
-                    container=container,
-                )
-            )
-        return instances
+            # Clean up on failure
+            if instance_path and instance_path.exists():
+                shutil.rmtree(instance_path)
+            try:
+                container = self.docker.containers.get(f"foundry-{name}")
+                container.remove(force=True)
+            except docker.errors.NotFound:
+                # Container doesn't exist, which is fine
+                pass
+            if isinstance(e, ValueError):
+                raise
+            raise RuntimeError(f"Failed to create instance {name}: {str(e)}")
 
     def start_instance(self, name: str) -> None:
-        """Start a Foundry instance.
+        """Start a Foundry VTT instance.
 
         Args:
-            name: Name of the instance to start
+            name: Name of the instance to start.
 
         Raises:
-            ValueError: If instance is not found
+            ValueError: If the instance doesn't exist.
+            RuntimeError: If the instance fails to start.
         """
-        instance = self.get_instance(name)
-        if not instance:
+        try:
+            config = self._load_instance_config(name)
+            try:
+                container = self.docker.containers.get(f"foundry-{name}")
+                container.start()
+                config["status"] = "running"
+                self._save_instance_config(name, config)
+            except docker.errors.NotFound:
+                raise ValueError(f"Instance {name} not found")
+        except FileNotFoundError:
             raise ValueError(f"Instance {name} not found")
-
-        self.docker_manager.start_container(name)
-        self.record_manager.update_status(name, "running")
+        except Exception as e:
+            raise RuntimeError(f"Failed to start instance {name}: {str(e)}")
 
     def stop_instance(self, name: str) -> None:
-        """Stop a Foundry instance.
+        """Stop a Foundry VTT instance.
 
         Args:
-            name: Name of the instance to stop
+            name: Name of the instance to stop.
 
         Raises:
-            ValueError: If instance is not found
+            ValueError: If the instance doesn't exist.
+            RuntimeError: If the instance fails to stop.
         """
-        instance = self.get_instance(name)
-        if not instance:
+        try:
+            config = self._load_instance_config(name)
+            try:
+                container = self.docker.containers.get(f"foundry-{name}")
+                container.stop()
+                config["status"] = "stopped"
+                self._save_instance_config(name, config)
+            except docker.errors.NotFound:
+                raise ValueError(f"Instance {name} not found")
+        except FileNotFoundError:
             raise ValueError(f"Instance {name} not found")
-
-        self.docker_manager.stop_container(name)
-        self.record_manager.update_status(name, "stopped")
-
-    def _cleanup_container(self, name: str) -> None:
-        """Clean up a container by stopping and removing it.
-
-        Args:
-            name: Name of the container to clean up
-        """
-        try:
-            self.docker_manager.stop_container(name)
-        except ContainerNotFoundError:
-            pass
-
-        try:
-            self.docker_manager.remove_container(name)
-        except ContainerNotFoundError:
-            pass
-
-    def _remove_data_directory(self, path: Path) -> None:
-        """Remove a data directory and all its contents.
-
-        Args:
-            path: Path to the directory to remove
-
-        Raises:
-            Exception: If directory removal fails
-        """
-        if not path.exists():
-            return
-
-        def remove_directory(dir_path: Path) -> None:
-            for item in dir_path.iterdir():
-                if item.is_file():
-                    item.unlink()
-                elif item.is_dir():
-                    remove_directory(item)
-            dir_path.rmdir()
-
-        try:
-            remove_directory(path)
-        except Exception:
-            logger.error("Failed to remove data directory")
-            raise
+        except Exception as e:
+            raise RuntimeError(f"Failed to stop instance {name}: {str(e)}")
 
     def remove_instance(self, name: str) -> None:
-        """Remove a Foundry instance and its data.
+        """Remove a Foundry VTT instance.
 
         Args:
-            name: Name of the instance to remove
+            name: Name of the instance to remove.
 
         Raises:
-            ValueError: If instance is not found
+            ValueError: If the instance doesn't exist.
+            RuntimeError: If the instance fails to be removed.
         """
-        instance = self.get_instance(name)
-        if not instance:
+        try:
+            self._load_instance_config(name)
+            try:
+                container = self.docker.containers.get(f"foundry-{name}")
+                container.remove(force=True)
+                instance_path = self._get_instance_path(name)
+                if instance_path.exists():
+                    shutil.rmtree(instance_path)
+            except docker.errors.NotFound:
+                raise ValueError(f"Instance {name} not found")
+        except FileNotFoundError:
             raise ValueError(f"Instance {name} not found")
+        except Exception as e:
+            raise RuntimeError(f"Failed to remove instance {name}: {str(e)}")
 
-        # Clean up container
-        self._cleanup_container(name)
+    def list_instances(self) -> List[Dict[str, Any]]:
+        """List all Foundry VTT instances.
 
-        # Remove data directory
-        self._remove_data_directory(instance.data_dir)
+        Returns:
+            List of instance dictionaries.
+        """
+        instances = []
+        for path in self._get_instance_paths():
+            try:
+                config = self._load_instance_config(path.name)
+                instances.append(config)
+            except Exception as e:
+                logger.error(f"Failed to load instance {path.name}: {e}")
+        return instances
 
-        # Remove record
-        self.record_manager.remove_record(name)
-
-    def migrate_instance(self, name: str, version: str) -> None:
-        """Migrate a Foundry instance to a new version.
+    def get_instance_status(self, name: str) -> str:
+        """Get the status of a Foundry VTT instance.
 
         Args:
-            name: Name of the instance to migrate
-            version: New version to migrate to
+            name: Name of the instance.
+
+        Returns:
+            Status of the instance.
 
         Raises:
-            ValueError: If instance is not found
+            FileNotFoundError: If the instance doesn't exist.
+            RuntimeError: If Docker is not available.
         """
-        instance = self.get_instance(name)
-        if not instance:
-            raise ValueError(f"Instance {name} not found")
+        self._check_docker()
+        self._load_instance_config(name)
 
-        # Stop instance
         try:
-            self.docker_manager.stop_container(name)
-        except ContainerNotFoundError:
-            pass
+            container = self.docker.containers.get(f"foundry-{name}")
+            return container.status
+        except Exception:
+            return "not_found"
+        except Exception as e:
+            raise RuntimeError(f"Failed to get instance status: {e}")
 
-        # Remove container
-        try:
-            self.docker_manager.remove_container(name)
-        except ContainerNotFoundError:
-            pass
-
-        # Get proxy port if SSL is enabled
-        proxy_port = self._get_proxy_port(
-            instance.container.attrs["Config"]["Env"] if instance.container else {}
-        )
-
-        # Create new container with new version
-        self.docker_manager.create_container(
-            name=name,
-            image=f"felddy/foundryvtt:{version}",
-            volumes={str(instance.data_dir): {"bind": "/data", "mode": "rw"}},
-            environment=(
-                instance.container.attrs["Config"]["Env"] if instance.container else {}
-            ),
-            port=instance.port,
-            proxy_port=proxy_port,
-        )
-
-        # Update record
-        self.record_manager.update_version(name, version)
-
-        # Start the container if it was running before
-        if instance.status == "running":
-            self.docker_manager.start_container(name)
-            self.record_manager.update_status(name, "running")
-
-    def get_available_versions(self) -> List[Dict[str, str]]:
+    def get_available_versions(self) -> List[str]:
         """Get available Foundry VTT versions.
 
         Returns:
-            List of dictionaries containing version information
-        """
-        return self.docker_manager.get_available_versions()
+            List of available versions.
 
-    def create_instances_from_config(
-        self, config: Optional[Dict] = None
-    ) -> List["FoundryInstance"]:
-        """Create instances from a configuration dictionary.
+        Raises:
+            RuntimeError: If Docker is not available.
+        """
+        self._check_docker()
+        try:
+            image = self.docker.images.get("felddy/foundryvtt")
+            return [tag.split(":")[1] for tag in image.tags]
+        except Exception as e:
+            raise RuntimeError(f"Failed to get available versions: {e}")
+
+    def migrate_instance(self, name: str, version: str) -> None:
+        """Migrate a Foundry VTT instance to a new version."""
+        try:
+            config = self._load_instance_config(name)
+            container = self.docker.containers.get(f"foundry-{name}")
+
+            # Stop the container
+            container.stop()
+
+            # Remove the container
+            container.remove()
+
+            # Create new container with updated version
+            self.create_instance(
+                name=name,
+                version=version,
+                port=config["port"],
+                admin_key=config["admin_key"],
+                username=config["username"],
+                password=config["password"],
+            )
+
+            # Update config
+            config["version"] = version
+            self._save_instance_config(name, config)
+        except Exception as e:
+            if isinstance(e, FileNotFoundError):
+                raise ValueError(f"Instance {name} not found")
+            raise RuntimeError(f"Failed to migrate instance: {str(e)}")
+
+    def get_instance_path(self, instance_name: str) -> Optional[Path]:
+        """Get the path for an instance's data directory.
 
         Args:
-            config: Optional configuration dictionary. If not provided, loads from
-                   default config file.
-
-        Returns:
-            List of created FoundryInstance objects.
-        """
-        if config is None:
-            from .config import load_config
-
-            config = load_config()
-
-        instances = []
-        for name, instance_config in config.get("instances", {}).items():
-            try:
-                instance = self.create_instance(
-                    name=name,
-                    version=instance_config.get("version"),
-                    port=instance_config.get("port", 30000),
-                    environment=instance_config.get("environment", {}),
-                )
-                instances.append(instance)
-            except Exception as e:
-                logger.error(f"Failed to create instance {name}: {e}")
-                raise
-
-        return instances
-
-    def get_instance_path(self, name: str) -> Optional[Path]:
-        """Get the path to an instance's data directory.
-
-        Args:
-            name: The name of the instance.
+            instance_name: Name of the instance.
 
         Returns:
             Path to the instance's data directory, or None if the instance doesn't exist.
         """
-        instance_path = self.base_dir / name
-        if not instance_path.exists():
-            return None
-        return instance_path
+        path = self._get_instance_path(instance_name)
+        return path if path.exists() else None
+
+    def list_systems(self, instance_name: str) -> List[Dict[str, Any]]:
+        """List all game systems for an instance.
+
+        Args:
+            instance_name: Name of the instance.
+
+        Returns:
+            List of system dictionaries.
+
+        Raises:
+            ValueError: If the instance doesn't exist.
+        """
+        instance_path = self.get_instance_path(instance_name)
+        if not instance_path:
+            raise ValueError(f"Instance {instance_name} not found")
+        system_manager = GameSystemManager(instance_path)
+        return system_manager.list_systems()
+
+    def list_modules(self, instance_name: str) -> List[Dict[str, Any]]:
+        """List all modules for an instance.
+
+        Args:
+            instance_name: Name of the instance.
+
+        Returns:
+            List of module dictionaries.
+
+        Raises:
+            ValueError: If the instance doesn't exist.
+        """
+        instance_path = self.get_instance_path(instance_name)
+        if not instance_path:
+            raise ValueError(f"Instance {instance_name} not found")
+        module_manager = ModuleManager(self.docker, instance_name, instance_path)
+        return module_manager.list_modules()
+
+    def list_worlds(self, instance_name: str) -> List[Dict[str, Any]]:
+        """List all worlds for an instance.
+
+        Args:
+            instance_name: Name of the instance.
+
+        Returns:
+            List of world dictionaries.
+
+        Raises:
+            ValueError: If the instance doesn't exist.
+        """
+        instance_path = self.get_instance_path(instance_name)
+        if not instance_path:
+            raise ValueError(f"Instance {instance_name} not found")
+        world_manager = WorldManager(instance_path)
+        return world_manager.list_worlds()
+
+    def create_instances_from_config(
+        self, config: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Create or update instances based on configuration.
+
+        Args:
+            config: Configuration dictionary containing instance definitions.
+
+        Returns:
+            List of created/updated instance dictionaries.
+        """
+        instances = []
+        for name, instance_config in config.get("instances", {}).items():
+            try:
+                # Check if instance exists
+                existing_config = None
+                try:
+                    existing_config = self._load_instance_config(name)
+                except FileNotFoundError:
+                    pass
+
+                # Create or update instance
+                if existing_config:
+                    # Update existing instance
+                    self.migrate_instance(name, instance_config["version"])
+                    if "admin_key" in instance_config:
+                        self._save_instance_config(name, instance_config)
+                else:
+                    # Create new instance
+                    self.create_instance(
+                        name=name,
+                        version=instance_config["version"],
+                        port=instance_config["port"],
+                        admin_key=instance_config.get("admin_key", ""),
+                        username=instance_config.get("username", ""),
+                        password=instance_config.get("password", ""),
+                    )
+
+                instances.append(self._load_instance_config(name))
+            except Exception as e:
+                logger.error(f"Failed to create/update instance {name}: {e}")
+                raise
+
+        return instances
+
+    def apply_config(self, config: Dict[str, Any]) -> None:
+        """Apply configuration to instances.
+
+        Args:
+            config: Configuration dictionary containing instance definitions.
+        """
+        self.create_instances_from_config(config)
+        existing_instances = self.list_instances()
+        existing_names = {instance["name"] for instance in existing_instances}
+        config_names = set(config.get("instances", {}).keys())
+
+        # Remove instances not in config
+        for name in existing_names - config_names:
+            try:
+                self.remove_instance(name)
+            except Exception as e:
+                logger.error(f"Failed to remove instance {name}: {e}")
+                raise

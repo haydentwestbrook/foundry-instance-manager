@@ -26,7 +26,7 @@ repos:
     rev: v1.7.0
     hooks:
     -   id: mypy
-        additional_dependencies: [types-requests, types-setuptools]
+        additional_dependencies: [types-requests, types-setuptools, types-PyYAML]
 
 -   repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
     rev: v9.5.0

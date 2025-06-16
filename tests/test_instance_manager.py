@@ -1,15 +1,11 @@
 """Tests for the Foundry instance manager functionality."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import docker
 import pytest
 
-from foundry_manager.foundry_instance_manager import (
-    FoundryInstance,
-    FoundryInstanceManager,
-)
-from foundry_manager.instance_record_manager import InstanceRecord
+from foundry_manager.foundry_instance_manager import FoundryInstanceManager
 
 
 @pytest.fixture
@@ -19,311 +15,258 @@ def base_dir(tmp_path):
 
 
 @pytest.fixture
-def mock_docker_manager():
-    """Create a mock docker manager."""
-    with patch("foundry_manager.foundry_instance_manager.DockerManager") as mock:
-        manager = mock.return_value
-        yield manager
+def mock_docker(monkeypatch):
+    """Mock Docker client."""
+    mock_docker = MagicMock()
+    monkeypatch.setattr("docker.from_env", lambda: mock_docker)
+    return mock_docker
 
 
 @pytest.fixture
-def mock_record_manager():
-    """Create a mock record manager."""
-    with patch(
-        "foundry_manager.foundry_instance_manager.InstanceRecordManager"
-    ) as mock:
-        manager = mock.return_value
-        yield manager
-
-
-@pytest.fixture
-def instance_manager(base_dir, mock_docker_manager, mock_record_manager):
-    """Create an instance manager with mocked dependencies."""
-    return FoundryInstanceManager(base_dir=base_dir)
+def instance_manager(tmp_path, mock_docker):
+    """Create a FoundryInstanceManager instance for testing with mocked Docker."""
+    return FoundryInstanceManager(base_dir=tmp_path, docker_client=mock_docker)
 
 
 class TestInstanceCreation:
-    """Test suite for instance creation functionality.
+    """Test suite for instance creation functionality."""
 
-    This class contains tests for the instance creation functionality of the
-    FoundryInstanceManager. It tests both successful instance creation scenarios and
-    error cases.
-
-    The tests cover:
-    - Creating an instance with all parameters
-    - Creating an instance with existing container
-    - Cleanup on instance creation failure
-    """
-
-    def test_create_instance_success(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
+    def test_create_instance_success(self, instance_manager, mock_docker):
         """Test successful instance creation."""
         # Mock container
         mock_container = MagicMock()
+        mock_container.name = "foundry-test-instance"
         mock_container.status = "created"
-        mock_docker_manager.create_container.return_value = mock_container
+        mock_docker.containers.run.return_value = mock_container
+        mock_docker.containers.get.side_effect = docker.errors.NotFound(
+            "Container not found"
+        )
+        mock_docker.images.pull.return_value = MagicMock()
 
         # Create instance
-        instance = instance_manager.create_instance(
+        instance_manager.create_instance(
             name="test-instance",
             version="11.0.0",
             port=30000,
-            environment={"TEST_VAR": "test_value"},
+            admin_key="test-key",
+            username="test-user",
+            password="test-pass",
         )
 
-        # Verify instance
-        assert instance.name == "test-instance"
-        assert instance.version == "11.0.0"
-        assert instance.port == 30000
-        assert instance.container == mock_container
+        # Verify container was created
+        mock_docker.containers.run.assert_called_once_with(
+            "felddy/foundryvtt:11.0.0",
+            name="foundry-test-instance",
+            detach=True,
+            ports={"30000/tcp": 30000},
+            volumes={
+                str(instance_manager._get_instance_path("test-instance")): {
+                    "bind": "/data",
+                    "mode": "rw",
+                }
+            },
+            environment={
+                "FOUNDRY_USERNAME": "test-user",
+                "FOUNDRY_PASSWORD": "test-pass",
+                "FOUNDRY_ADMIN_KEY": "test-key",
+            },
+        )
 
-        # Verify docker manager calls
-        mock_docker_manager.create_container.assert_called_once()
-        mock_record_manager.add_record.assert_called_once()
+    def test_create_instance_existing(self, instance_manager, mock_docker):
+        """Test creating an instance that already exists."""
+        # Create instance config
+        instance_path = instance_manager._get_instance_path("test-instance")
+        instance_path.mkdir(parents=True, exist_ok=True)
+        config = {
+            "name": "test-instance",
+            "version": "11.0.0",
+            "port": 30000,
+            "data_dir": str(instance_path),
+            "status": "created",
+            "admin_key": "test-key",
+            "username": "test-user",
+            "password": "test-pass",
+        }
+        instance_manager._save_instance_config("test-instance", config)
 
-    def test_create_instance_existing_container(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
-        """Test creating instance when container already exists."""
-        # Mock existing container
-        mock_container = MagicMock()
-        mock_docker_manager.get_container.return_value = mock_container
+        # Try to create instance again
+        with pytest.raises(ValueError, match="Instance test-instance already exists"):
+            instance_manager.create_instance(
+                name="test-instance",
+                version="11.0.0",
+                port=30000,
+                admin_key="test-key",
+                username="test-user",
+                password="test-pass",
+            )
 
-        # Create instance
-        instance_manager.create_instance(name="test-instance", version="11.0.0")
-
-        # Verify old container was removed
-        mock_docker_manager.remove_container.assert_called_once_with("test-instance")
-        mock_docker_manager.create_container.assert_called_once()
-
-    def test_create_instance_cleanup_on_error(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
+    def test_create_instance_cleanup_on_error(self, instance_manager, mock_docker):
         """Test cleanup when instance creation fails."""
         # Mock container creation failure
-        mock_docker_manager.create_container.side_effect = ValueError("Test error")
+        mock_docker.containers.run.side_effect = Exception("Failed to create container")
 
-        # Attempt to create instance
-        with pytest.raises(ValueError, match="Test error"):
-            instance_manager.create_instance("test-instance")
+        # Try to create instance
+        with pytest.raises(
+            RuntimeError, match="Failed to create instance test-instance"
+        ):
+            instance_manager.create_instance(
+                name="test-instance",
+                version="11.0.0",
+                port=30000,
+                admin_key="test-key",
+                username="test-user",
+                password="test-pass",
+            )
 
         # Verify cleanup
-        mock_docker_manager.remove_container.assert_called_once_with("test-instance")
+        instance_path = instance_manager._get_instance_path("test-instance")
+        assert not instance_path.exists()
 
 
 class TestInstanceManagement:
-    """Test suite for instance management functionality.
+    """Test suite for instance management functionality."""
 
-    This class contains tests for the instance management functionality of the
-    FoundryInstanceManager. It tests both successful instance retrieval scenarios
-    and error cases.
-
-    The tests cover:
-    - Getting an existing instance
-    - Getting a non-existent instance
-    - Listing all instances
-    - Starting an instance
-    - Stopping an instance
-    - Removing an instance
-    - Migrating an instance to a new version
-    """
-
-    def test_get_instance(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
-        """Test getting an instance."""
-        # Mock record and container
-        mock_record = InstanceRecord(
-            name="test-instance",
-            version="11.0.0",
-            data_dir=Path("/test/data"),
-            port=30000,
-            status="running",
-        )
-        mock_container = MagicMock()
-        mock_record_manager.get_record.return_value = mock_record
-        mock_docker_manager.get_container.return_value = mock_container
-
-        # Get instance
-        instance = instance_manager.get_instance("test-instance")
-
-        # Verify instance
-        assert instance.name == "test-instance"
-        assert instance.version == "11.0.0"
-        assert instance.container == mock_container
-
-    def test_list_instances(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
+    def test_list_instances(self, instance_manager, mock_docker):
         """Test listing all instances."""
-        # Mock records and containers
-        mock_records = [
-            InstanceRecord(
-                name="test-instance-1",
-                version="11.0.0",
-                data_dir=Path("/test/data1"),
-                port=30000,
-                status="running",
-            ),
-            InstanceRecord(
-                name="test-instance-2",
-                version="11.1.0",
-                data_dir=Path("/test/data2"),
-                port=30001,
-                status="stopped",
-            ),
-        ]
+        # Mock container
         mock_container = MagicMock()
-        mock_record_manager.get_all_records.return_value = mock_records
-        mock_docker_manager.get_container.return_value = mock_container
+        mock_container.name = "foundry-test-instance"
+        mock_container.status = "running"
+        mock_docker.containers.get.return_value = mock_container
+
+        # Create instance config
+        instance_path = instance_manager._get_instance_path("test-instance")
+        instance_path.mkdir(parents=True, exist_ok=True)
+        config = {
+            "name": "test-instance",
+            "version": "11.0.0",
+            "port": 30000,
+            "data_dir": str(instance_path),
+            "status": "running",
+            "admin_key": "test-key",
+            "username": "test-user",
+            "password": "test-pass",
+        }
+        instance_manager._save_instance_config("test-instance", config)
 
         # List instances
         instances = instance_manager.list_instances()
+        assert len(instances) == 1
+        assert instances[0]["name"] == "test-instance"
+        assert instances[0]["version"] == "11.0.0"
+        assert instances[0]["status"] == "running"
 
-        # Verify instances
-        assert len(instances) == 2
-        assert instances[0].name == "test-instance-1"
-        assert instances[1].name == "test-instance-2"
-
-
-class TestInstanceOperations:
-    """Test suite for instance operations functionality.
-
-    This class contains tests for the operations that can be performed on Foundry
-    instances. It tests both successful instance operations and error cases.
-
-    The tests cover:
-    - Starting an instance
-    - Stopping an instance
-    - Removing an instance
-    - Migrating an instance to a new version
-    """
-
-    def test_start_instance(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
+    def test_start_instance(self, instance_manager, mock_docker):
         """Test starting an instance."""
-        # Mock instance
-        mock_instance = MagicMock(spec=FoundryInstance)
-        mock_instance.name = "test-instance"
-        instance_manager.get_instance = MagicMock(return_value=mock_instance)
+        # Mock container
+        mock_container = MagicMock()
+        mock_container.name = "foundry-test-instance"
+        mock_container.status = "stopped"
+        mock_docker.containers.get.return_value = mock_container
+
+        # Create instance config
+        instance_path = instance_manager._get_instance_path("test-instance")
+        instance_path.mkdir(parents=True, exist_ok=True)
+        config = {
+            "name": "test-instance",
+            "version": "11.0.0",
+            "port": 30000,
+            "data_dir": str(instance_path),
+            "status": "stopped",
+            "admin_key": "test-key",
+            "username": "test-user",
+            "password": "test-pass",
+        }
+        instance_manager._save_instance_config("test-instance", config)
 
         # Start instance
         instance_manager.start_instance("test-instance")
+        mock_container.start.assert_called_once()
 
-        # Verify operations
-        mock_docker_manager.start_container.assert_called_once_with("test-instance")
-        mock_record_manager.update_status.assert_called_once_with(
-            "test-instance", "running"
-        )
-
-    def test_stop_instance(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
+    def test_stop_instance(self, instance_manager, mock_docker):
         """Test stopping an instance."""
-        # Mock instance
-        mock_instance = MagicMock(spec=FoundryInstance)
-        mock_instance.name = "test-instance"
-        instance_manager.get_instance = MagicMock(return_value=mock_instance)
+        # Mock container
+        mock_container = MagicMock()
+        mock_container.name = "foundry-test-instance"
+        mock_container.status = "running"
+        mock_docker.containers.get.return_value = mock_container
+
+        # Create instance config
+        instance_path = instance_manager._get_instance_path("test-instance")
+        instance_path.mkdir(parents=True, exist_ok=True)
+        config = {
+            "name": "test-instance",
+            "version": "11.0.0",
+            "port": 30000,
+            "data_dir": str(instance_path),
+            "status": "running",
+            "admin_key": "test-key",
+            "username": "test-user",
+            "password": "test-pass",
+        }
+        instance_manager._save_instance_config("test-instance", config)
 
         # Stop instance
         instance_manager.stop_instance("test-instance")
+        mock_container.stop.assert_called_once()
 
-        # Verify operations
-        mock_docker_manager.stop_container.assert_called_once_with("test-instance")
-        mock_record_manager.update_status.assert_called_once_with(
-            "test-instance", "stopped"
-        )
-
-    def test_remove_instance(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
+    def test_remove_instance(self, instance_manager, mock_docker):
         """Test removing an instance."""
-        # Mock instance
-        mock_instance = MagicMock(spec=FoundryInstance)
-        mock_instance.name = "test-instance"
-        mock_instance.status = "stopped"
-        mock_instance.data_dir = Path("/test/data")
-        instance_manager.get_instance = MagicMock(return_value=mock_instance)
+        # Mock container
+        mock_container = MagicMock()
+        mock_container.name = "foundry-test-instance"
+        mock_docker.containers.get.return_value = mock_container
+
+        # Create instance config
+        instance_path = instance_manager._get_instance_path("test-instance")
+        instance_path.mkdir(parents=True, exist_ok=True)
+        config = {
+            "name": "test-instance",
+            "version": "11.0.0",
+            "port": 30000,
+            "data_dir": str(instance_path),
+            "status": "stopped",
+            "admin_key": "test-key",
+            "username": "test-user",
+            "password": "test-pass",
+        }
+        instance_manager._save_instance_config("test-instance", config)
 
         # Remove instance
         instance_manager.remove_instance("test-instance")
-
-        # Verify operations
-        mock_docker_manager.remove_container.assert_called_once_with("test-instance")
-        mock_record_manager.remove_record.assert_called_once_with("test-instance")
-
-    def test_migrate_instance(
-        self, instance_manager, mock_docker_manager, mock_record_manager
-    ):
-        """Test migrating an instance to a new version."""
-        # Mock instance
-        mock_instance = MagicMock(spec=FoundryInstance)
-        mock_instance.name = "test-instance"
-        mock_instance.status = "running"
-        mock_instance.data_dir = Path("/test/data")
-        mock_instance.port = 30000
-        instance_manager.get_instance = MagicMock(return_value=mock_instance)
-
-        # Mock new container
-        mock_container = MagicMock()
-        mock_docker_manager.create_container.return_value = mock_container
-
-        # Migrate instance
-        instance_manager.migrate_instance("test-instance", "11.1.0")
-
-        # Verify operations
-        mock_docker_manager.stop_container.assert_called_once_with("test-instance")
-        mock_docker_manager.remove_container.assert_called_once_with("test-instance")
-        mock_docker_manager.create_container.assert_called_once()
-        mock_record_manager.update_version.assert_called_once_with(
-            "test-instance", "11.1.0"
-        )
-        mock_docker_manager.start_container.assert_called_once_with("test-instance")
+        mock_container.remove.assert_called_once_with(force=True)
+        assert not instance_path.exists()
 
 
 class TestErrorHandling:
-    """Test suite for error handling functionality.
+    """Test error handling functionality."""
 
-    This class contains tests for the error handling functionality of the
-    FoundryInstanceManager. It tests both successful error handling scenarios and
-    error cases.
-
-    The tests cover:
-    - Getting a non-existent instance
-    - Starting a non-existent instance
-    - Stopping a non-existent instance
-    - Removing a non-existent instance
-    - Migrating a non-existent instance
-    """
-
-    def test_get_nonexistent_instance(self, instance_manager, mock_record_manager):
+    def test_get_nonexistent_instance(self, instance_manager, mock_docker):
         """Test getting a non-existent instance."""
-        mock_record_manager.get_record.return_value = None
-        instance = instance_manager.get_instance("nonexistent-instance")
-        assert instance is None
+        mock_docker.containers.get.side_effect = Exception("Container not found")
+        with pytest.raises(FileNotFoundError):
+            instance_manager.get_instance_status("nonexistent")
 
-    def test_start_nonexistent_instance(self, instance_manager, mock_record_manager):
+    def test_start_nonexistent_instance(self, instance_manager, mock_docker):
         """Test starting a non-existent instance."""
-        mock_record_manager.get_record.return_value = None
-        with pytest.raises(ValueError, match="Instance nonexistent-instance not found"):
-            instance_manager.start_instance("nonexistent-instance")
+        mock_docker.containers.get.side_effect = docker.errors.NotFound(
+            "Container not found"
+        )
+        with pytest.raises(ValueError, match="Instance test-instance not found"):
+            instance_manager.start_instance("test-instance")
 
-    def test_stop_nonexistent_instance(self, instance_manager, mock_record_manager):
+    def test_stop_nonexistent_instance(self, instance_manager, mock_docker):
         """Test stopping a non-existent instance."""
-        mock_record_manager.get_record.return_value = None
-        with pytest.raises(ValueError, match="Instance nonexistent-instance not found"):
-            instance_manager.stop_instance("nonexistent-instance")
+        mock_docker.containers.get.side_effect = docker.errors.NotFound(
+            "Container not found"
+        )
+        with pytest.raises(ValueError, match="Instance test-instance not found"):
+            instance_manager.stop_instance("test-instance")
 
-    def test_remove_nonexistent_instance(self, instance_manager, mock_record_manager):
+    def test_remove_nonexistent_instance(self, instance_manager, mock_docker):
         """Test removing a non-existent instance."""
-        mock_record_manager.get_record.return_value = None
-        with pytest.raises(ValueError, match="Instance nonexistent-instance not found"):
-            instance_manager.remove_instance("nonexistent-instance")
-
-    def test_migrate_nonexistent_instance(self, instance_manager, mock_record_manager):
-        """Test migrating a non-existent instance."""
-        mock_record_manager.get_record.return_value = None
-        with pytest.raises(ValueError, match="Instance nonexistent-instance not found"):
-            instance_manager.migrate_instance("nonexistent-instance", "11.1.0")
+        mock_docker.containers.get.side_effect = docker.errors.NotFound(
+            "Container not found"
+        )
+        with pytest.raises(ValueError, match="Instance test-instance not found"):
+            instance_manager.remove_instance("test-instance")

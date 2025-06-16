@@ -1,0 +1,17 @@
+asset_processing:
+  images:
+    webp:
+      quality: 85
+      method: 6  # 0-6, higher means better compression but slower
+      lossless: false
+    optimization:
+      strip_metadata: true
+      progressive: true
+    max_dimensions:
+      width: 4096
+      height: 4096
+  video:
+    webm:
+      quality: "good"
+      preset: "medium"
+    max_resolution: "1080p"
