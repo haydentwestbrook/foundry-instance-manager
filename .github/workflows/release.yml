@@ -35,7 +35,7 @@ jobs:
 
       - name: Generate changelog
         run: |
-          poetry run git-changelog -o CHANGELOG.md
+          poetry run git-changelog -o CHANGELOG.md .
 
       - name: Build package
         run: |
