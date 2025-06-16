@@ -46,39 +46,27 @@ jobs:
       run: |
         poetry run pytest
 
-    - name: Bump version
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    - name: Bump version and create tag
       id: bump
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # Temporarily disable pre-commit hooks
-        git config --unset core.hooksPath || true
-        # Get current version before bumping
-        CURRENT_VERSION=$(poetry run bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
+        # Get current version
+        CURRENT_VERSION=$(poetry version -s)
         # Bump version
-        poetry run bump2version patch
-        # Re-enable pre-commit hooks
-        git config core.hooksPath .git/hooks
-        # Run pre-commit hooks manually and allow them to modify files
-        pre-commit run --all-files || true
-        # Stage all changes including those from pre-commit hooks
-        git add .
-        # Commit all changes in one commit
-        git commit -m "Bump version and apply pre-commit fixes" || true
-        # Get the new version
-        NEW_VERSION=$(poetry run bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
-        # Push changes first
-        git push origin HEAD:main
-        # Create and push the tag if it doesn't exist
-        if ! git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
-          git tag -a "v${NEW_VERSION}" -m "Release version ${NEW_VERSION}"
-          git push origin "v${NEW_VERSION}"
+        poetry version patch
+        # Stage and commit changes
+        git add pyproject.toml CHANGELOG.md
+        git commit -m "Bump version to $(poetry version -s)"
+        # Create tag if it doesn't exist
+        TAG="v$(poetry version -s)"
+        if git rev-parse "$TAG" >/dev/null 2>&1; then
+          echo "Tag $TAG already exists. Skipping tag creation."
+          echo "should_release=false" >> $GITHUB_OUTPUT
+        else
+          git tag $TAG
+          git push origin $TAG
+          echo "should_release=true" >> $GITHUB_OUTPUT
         fi
-        # Set output for next step
-        echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
-        # Set a flag to indicate we should run release steps
-        echo "should_release=true" >> $GITHUB_OUTPUT
+        git push origin HEAD:main
 
     - name: Generate changelog
       if: startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true'
@@ -91,7 +79,7 @@ jobs:
         poetry build
 
     - name: Create GitHub release
-      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
+      if: startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true'
       uses: softprops/action-gh-release@v1
       with:
         files: dist/*
