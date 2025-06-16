@@ -42,3 +42,18 @@ env/
 .env/
 .venv/
 .vercel
+
+# Cache directories
+.cache/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
