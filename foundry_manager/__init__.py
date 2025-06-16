@@ -1,3 +1,3 @@
-"""Foundry Instance Manager package for managing Foundry VTT instances."""
+"""Foundry VTT Instance Manager."""
 
 __version__ = "0.1.0"
