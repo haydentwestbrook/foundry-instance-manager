@@ -54,6 +54,8 @@ jobs:
       run: |
         # Temporarily disable pre-commit hooks
         git config --unset core.hooksPath || true
+        # Get current version before bumping
+        CURRENT_VERSION=$(poetry run bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
         # Bump version
         poetry run bump2version patch
         # Re-enable pre-commit hooks
@@ -66,10 +68,13 @@ jobs:
         git commit -m "Bump version and apply pre-commit fixes" || true
         # Get the new version
         NEW_VERSION=$(poetry run bump2version --dry-run --list patch | grep current_version | sed -r s,"^.*=",,)
-        # Create and push the tag
-        git tag -a "v${NEW_VERSION}" -m "Release version ${NEW_VERSION}"
+        # Push changes first
         git push origin HEAD:main
-        git push origin "v${NEW_VERSION}"
+        # Create and push the tag if it doesn't exist
+        if ! git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
+          git tag -a "v${NEW_VERSION}" -m "Release version ${NEW_VERSION}"
+          git push origin "v${NEW_VERSION}"
+        fi
         # Set output for next step
         echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
 
