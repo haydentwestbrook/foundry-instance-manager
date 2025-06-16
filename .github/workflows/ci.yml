@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
@@ -7,89 +7,188 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions:
-  contents: write
-  packages: write
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  POETRY_VIRTUALENVS_CREATE: true
+  POETRY_VIRTUALENVS_IN_PROJECT: true
+  POETRY_CACHE_DIR: ${{ github.workspace }}/.poetry-cache
 
 jobs:
-  test:
+  quality:
+    name: Quality Checks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install poetry
-        poetry install
-        pip install pre-commit changelog sphinx
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
 
-    - name: Configure Git
-      run: |
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-
 
-    - name: Run linting
-      run: |
-        poetry run pre-commit run --all-files
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: |
+          poetry install --no-interaction --no-root
+          poetry install --no-interaction
 
-    - name: Run tests
-      run: |
-        poetry run pytest
+      - name: Run linting
+        run: |
+          poetry run flake8 .
+          poetry run black . --check
+          poetry run isort . --check-only
+          poetry run mypy .
 
-    - name: Bump version and create tag
-      id: bump
-      run: |
-        # Get current version
-        CURRENT_VERSION=$(poetry version -s)
-        # Bump version
-        poetry version patch
-        # Stage and commit changes
-        git add pyproject.toml CHANGELOG.md
-        git commit -m "Bump version to $(poetry version -s)"
-        # Create tag if it doesn't exist
-        TAG="v$(poetry version -s)"
-        if git rev-parse "$TAG" >/dev/null 2>&1; then
-          echo "Tag $TAG already exists. Skipping tag creation."
-          echo "should_release=false" >> $GITHUB_OUTPUT
-        else
+      - name: Run tests with coverage
+        run: |
+          poetry run pytest --cov=foundry_instance_manager --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: true
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run Bandit security checks
+        run: poetry run bandit -r foundry_instance_manager
+
+      - name: Run Safety checks
+        run: poetry run safety check
+
+  version:
+    name: Version Management
+    needs: [quality, security]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Bump version and create tag
+        id: bump
+        run: |
+          # Get current version
+          CURRENT_VERSION=$(poetry version -s)
+          # Bump version
+          poetry version patch
+          NEW_VERSION=$(poetry version -s)
+
+          # Update changelog
+          poetry run changelog generate-md CHANGELOG.md
+
+          # Stage changes
+          git add pyproject.toml CHANGELOG.md
+          git commit -m "Bump version to $NEW_VERSION"
+
+          # Create and push tag
+          TAG="v$NEW_VERSION"
           git tag $TAG
           git push origin $TAG
+          git push origin HEAD:main
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "should_release=true" >> $GITHUB_OUTPUT
-        fi
-        git push origin HEAD:main
 
-    - name: Generate changelog
-      if: startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true'
-      run: |
-        poetry run changelog generate-md CHANGELOG.md
+  release:
+    name: Release
+    needs: version
+    if: startsWith(github.ref, 'refs/tags/') || needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-    - name: Build package
-      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
-      run: |
-        poetry build
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'poetry'
 
-    - name: Create GitHub release
-      if: startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true'
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/*
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
 
-    - name: Publish to PyPI
-      if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
-      run: |
-        poetry publish
-      env:
-        PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Build package
+        run: poetry build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to PyPI
+        if: success()
+        run: poetry publish --no-interaction
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
