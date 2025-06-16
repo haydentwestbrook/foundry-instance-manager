@@ -15,7 +15,7 @@ CURRENT_VERSION=$(python -c "from foundry_manager import __version__; print(__ve
 
 # Generate changelog
 echo "Generating changelog..."
-git-changelog -o CHANGELOG.md
+git-chglog -o CHANGELOG.md
 
 # Bump version
 bump2version --allow-dirty $VERSION_TYPE

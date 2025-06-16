@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD
 
 on:
   push:
@@ -9,12 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.9]
-
     steps:
     - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Fetch all history for proper versioning
 
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -29,10 +27,6 @@ jobs:
       run: |
         poetry install
 
-    - name: Run tests
-      run: |
-        poetry run pytest tests/
-
     - name: Run linting
       run: |
         poetry run black . --check
@@ -40,8 +34,56 @@ jobs:
         poetry run flake8 .
         poetry run mypy foundry_manager/
 
-    - name: Run version bump script
+    - name: Run unit tests
+      run: |
+        poetry run pytest tests/ -v
+
+    - name: Run CLI workflow tests
+      run: |
+        chmod +x ./scripts/test_cli_workflow.sh
+        ./scripts/test_cli_workflow.sh
+
+    - name: Check version update
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
-        chmod +x ./scripts/bump_version.sh
-        ./scripts/bump_version.sh patch
+        # Get the last version from git tags
+        LAST_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        CURRENT_VERSION=$(python -c "from foundry_manager import __version__; print(__version__)")
+
+        # Remove 'v' prefix for comparison
+        LAST_VERSION=${LAST_VERSION#v}
+
+        if [ "$LAST_VERSION" = "$CURRENT_VERSION" ]; then
+          echo "Error: Version has not been updated. Current version: $CURRENT_VERSION"
+          exit 1
+        fi
+
+        echo "Version updated from $LAST_VERSION to $CURRENT_VERSION"
+
+    - name: Generate changelog
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        poetry run git-changelog -o CHANGELOG.md .
+
+    - name: Build package
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        poetry build
+
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/*
+        body_path: CHANGELOG.md
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Publish to PyPI
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        poetry publish --no-interaction
+      env:
+        POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
