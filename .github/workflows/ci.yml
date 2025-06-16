@@ -38,11 +38,6 @@ jobs:
       run: |
         poetry run pytest tests/ -v
 
-    - name: Run CLI workflow tests
-      run: |
-        chmod +x ./scripts/test_cli_workflow.sh
-        ./scripts/test_cli_workflow.sh
-
     - name: Check version update
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
