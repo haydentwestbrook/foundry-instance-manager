@@ -21,11 +21,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install git-changelog
+          poetry install
 
       - name: Get version
         id: get_version
@@ -33,11 +35,11 @@ jobs:
 
       - name: Generate changelog
         run: |
-          git-changelog -o CHANGELOG.md
+          poetry run git-changelog -o CHANGELOG.md
 
       - name: Build package
         run: |
-          python -m build
+          poetry build
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -52,8 +54,6 @@ jobs:
       - name: Publish to PyPI
         if: success()
         run: |
-          pip install twine
-          twine upload dist/*
+          poetry publish --no-interaction
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}

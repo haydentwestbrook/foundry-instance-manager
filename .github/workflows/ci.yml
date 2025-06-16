@@ -45,7 +45,3 @@ jobs:
       run: |
         chmod +x ./scripts/bump_version.sh
         ./scripts/bump_version.sh patch
-
-    - name: Build package
-      run: |
-        poetry build
