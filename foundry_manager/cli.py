@@ -37,6 +37,7 @@ from foundry_manager.cli_output import (
 )
 
 # isort: on
+from foundry_manager.asset_manager import AssetManager
 from foundry_manager.foundry_instance_manager import FoundryInstanceManager
 from foundry_manager.game_system_manager import GameSystemManager
 from foundry_manager.module_manager import ModuleManager
@@ -804,6 +805,127 @@ def remove_world(instance, world_id):
     except Exception as e:
         logger.error(f"Failed to remove world: {e}")
         raise click.ClickException(f"Failed to remove world: {str(e)}")
+
+
+@cli.group()
+def assets():
+    """Manage shared assets for Foundry VTT instances."""
+    pass
+
+
+@assets.command()
+@click.argument("file_path", type=click.Path(exists=True))
+@click.option("--metadata", help="JSON metadata for the asset")
+def upload(file_path, metadata):
+    """Upload an asset to the shared directory."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        asset_manager = AssetManager(manager.base_dir)
+
+        # Parse metadata if provided
+        metadata_dict = None
+        if metadata:
+            try:
+                metadata_dict = json.loads(metadata)
+            except json.JSONDecodeError:
+                print_error("Invalid metadata JSON")
+                return
+
+        # Upload asset
+        asset_id = asset_manager.upload_asset(file_path, metadata_dict)
+        if asset_id:
+            print_success(f"Asset uploaded successfully with ID: {asset_id}")
+        else:
+            print_error("Failed to upload asset")
+    except Exception as e:
+        logger.error(f"Failed to upload asset: {e}")
+        raise click.ClickException(f"Failed to upload asset: {str(e)}")
+
+
+@assets.command("list")
+@click.option("--type", help="Filter assets by type")
+def list_assets(type):
+    """List all assets or assets of a specific type."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        asset_manager = AssetManager(manager.base_dir)
+
+        assets = asset_manager.list_assets(type)
+        if not assets:
+            print_info("No assets found")
+            return
+
+        # Create a table of assets
+        table = Table(title="Shared Assets")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Type", style="yellow")
+        table.add_column("Size", style="blue")
+        table.add_column("Uploaded", style="magenta")
+
+        for asset in assets:
+            size_mb = asset["size"] / (1024 * 1024)
+            table.add_row(
+                asset["id"],
+                asset["name"],
+                asset["type"],
+                f"{size_mb:.2f} MB",
+                asset["uploaded"],
+            )
+
+        console.print(table)
+    except Exception as e:
+        logger.error(f"Failed to list assets: {e}")
+        raise click.ClickException(f"Failed to list assets: {str(e)}")
+
+
+@assets.command()
+@click.argument("asset_id")
+def info(asset_id):
+    """Get detailed information about a specific asset."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        asset_manager = AssetManager(manager.base_dir)
+
+        asset_info = asset_manager.get_asset_info(asset_id)
+        if not asset_info:
+            print_error(f"Asset {asset_id} not found")
+            return
+
+        # Print asset information
+        print_info(f"Asset ID: {asset_info['id']}")
+        print_info(f"Name: {asset_info['name']}")
+        print_info(f"Type: {asset_info['type']}")
+        print_info(f"Size: {asset_info['size'] / (1024 * 1024):.2f} MB")
+        print_info(f"Uploaded: {asset_info['uploaded']}")
+        if asset_info["metadata"]:
+            print_info("Metadata:")
+            for key, value in asset_info["metadata"].items():
+                print_info(f"  {key}: {value}")
+    except Exception as e:
+        logger.error(f"Failed to get asset info: {e}")
+        raise click.ClickException(f"Failed to get asset info: {str(e)}")
+
+
+@assets.command("remove")
+@click.argument("asset_id")
+def remove_asset(asset_id):
+    """Remove an asset from the shared directory."""
+    try:
+        config = load_config()
+        manager = FoundryInstanceManager(base_dir=Path(config["base_dir"]))
+        asset_manager = AssetManager(manager.base_dir)
+
+        if asset_manager.remove_asset(asset_id):
+            print_success(f"Asset {asset_id} removed successfully")
+        else:
+            print_error(f"Failed to remove asset {asset_id}")
+    except Exception as e:
+        logger.error(f"Failed to remove asset: {e}")
+        raise click.ClickException(f"Failed to remove asset: {str(e)}")
 
 
 if __name__ == "__main__":

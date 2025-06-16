@@ -182,6 +182,7 @@ class FoundryInstanceManager:
         """
         container = None
         data_dir = self.base_dir / name
+        shared_assets_dir = self.base_dir / "shared_assets"
 
         try:
             # Clean up any existing container
@@ -196,11 +197,17 @@ class FoundryInstanceManager:
             # Get proxy port if SSL is enabled
             proxy_port = self._get_proxy_port(environment)
 
+            # Set up volumes
+            volumes = {
+                str(data_dir): {"bind": "/data", "mode": "rw"},
+                str(shared_assets_dir): {"bind": "/data/shared_assets", "mode": "ro"},
+            }
+
             # Create container
             container = self.docker_manager.create_container(
                 name=name,
                 image=f"felddy/foundryvtt:{version}",
-                volumes={str(data_dir): {"bind": "/data", "mode": "rw"}},
+                volumes=volumes,
                 environment=environment or {},
                 port=port,
                 proxy_port=proxy_port,
@@ -215,7 +222,7 @@ class FoundryInstanceManager:
                 container=container,
             )
 
-            # Add record
+            # Save instance record
             self.record_manager.add_record(
                 InstanceRecord(
                     name=name,
@@ -227,11 +234,9 @@ class FoundryInstanceManager:
             )
 
             return instance
-
-        except Exception:
-            # Clean up on error
+        except Exception as e:
             self._cleanup_on_error(name, data_dir, container)
-            raise
+            raise ValueError(f"Failed to create instance: {str(e)}")
 
     def get_instance(self, name: str) -> Optional[FoundryInstance]:
         """Get a Foundry instance by name.
