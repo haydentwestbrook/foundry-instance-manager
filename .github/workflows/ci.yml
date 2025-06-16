@@ -30,7 +30,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install poetry
         poetry install
-        pip install pre-commit changelog
+        pip install pre-commit changelog sphinx
 
     - name: Configure Git
       run: |
