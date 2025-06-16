@@ -25,7 +25,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
-        pip install build
+        pip install build poetry-core
 
     - name: Run tests
       run: |
@@ -43,3 +43,7 @@ jobs:
       run: |
         chmod +x ./scripts/bump_version.sh
         ./scripts/bump_version.sh patch
+
+    - name: Build package
+      run: |
+        python -m build
