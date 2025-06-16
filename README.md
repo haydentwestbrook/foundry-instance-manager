@@ -49,7 +49,7 @@ The tool uses the following directory structure:
 - Docker installed and running
 - Docker Python SDK
 - Click
-- Rich 
+- Rich
 
 ## Development with Cursor
 
@@ -85,4 +85,4 @@ Cursor is an AI-powered IDE that can help with development tasks. Here are some 
 - "Extract common functionality into a shared utility module"
 - "Split [large function/class] into smaller, more focused components"
 
-Remember to be specific in your prompts and provide context when needed. Cursor works best when given clear instructions and relevant information about the task at hand. 
+Remember to be specific in your prompts and provide context when needed. Cursor works best when given clear instructions and relevant information about the task at hand.
