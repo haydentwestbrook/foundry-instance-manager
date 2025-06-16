@@ -83,7 +83,7 @@ jobs:
     - name: Generate changelog
       if: startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true'
       run: |
-        poetry run changelog generate
+        poetry run changelog generate-md
 
     - name: Build package
       if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || steps.bump.outputs.should_release == 'true')
