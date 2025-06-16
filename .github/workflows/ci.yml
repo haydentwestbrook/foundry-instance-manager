@@ -29,6 +29,7 @@ jobs:
     - name: Install dependencies
       run: |
         poetry install
+        pip install pre-commit
 
     - name: Run linting
       run: |
