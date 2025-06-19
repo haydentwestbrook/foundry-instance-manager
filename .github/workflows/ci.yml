@@ -157,7 +157,6 @@ jobs:
   release:
     name: Release
     needs: version
-    if: startsWith(github.ref, 'refs/tags/') || needs.version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
