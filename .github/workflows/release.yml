@@ -105,13 +105,13 @@ jobs:
       - name: Build package
         run: poetry build
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.ACTIONS_TOKEN }}
+      # - name: Create GitHub Release
+      #   uses: softprops/action-gh-release@v1
+      #   with:
+      #     files: dist/*
+      #     generate_release_notes: true
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.ACTIONS_TOKEN }}
 
       - name: Publish to PyPI
         if: success()
