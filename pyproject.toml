@@ -2,7 +2,7 @@
 name = "foundry-instance-manager"
 version = "0.1.28"
 description = "A command-line tool for managing Foundry VTT instances"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Hayden Westbrook <haydentwestbrook@gmail.com>"]
 readme = "README.md"
 packages = [{include = "foundry_manager"}]
 

@@ -1,5 +1,7 @@
 # Foundry Instance Manager
 
+## THIS PROJECT IS IN PROGRESS AND NOT READY FOR USE
+
 A CLI tool for managing multiple Docker containers that share the same image but have individual data directories and a shared data directory.
 
 ## Features
@@ -49,7 +51,7 @@ The tool uses the following directory structure:
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.9+
 - Docker installed and running
 - Poetry
 

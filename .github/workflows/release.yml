@@ -117,4 +117,4 @@ jobs:
         if: success()
         run: poetry publish --no-interaction
         env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
