@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "foundry-instance-manager"
-version = "0.1.29"
+version = "0.1.30"
 description = "A command-line tool for managing Foundry VTT instances"
 authors = ["Hayden Westbrook <haydentwestbrook@gmail.com>"]
 readme = "README.md"
