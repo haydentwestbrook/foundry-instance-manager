@@ -60,7 +60,7 @@ class TestInstanceCreation:
             detach=True,
             ports={"30000/tcp": 30000},
             volumes={
-                str(instance_manager._get_instance_path("test-instance")): {
+                str(instance_manager._get_instance_path("test-instance").resolve()): {
                     "bind": "/data",
                     "mode": "rw",
                 }

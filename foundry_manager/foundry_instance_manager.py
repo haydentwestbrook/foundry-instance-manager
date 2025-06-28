@@ -193,7 +193,7 @@ class FoundryInstanceManager:
                 name=f"foundry-{name}",
                 detach=True,
                 ports={f"{port}/tcp": port},
-                volumes={str(instance_path): {"bind": "/data", "mode": "rw"}},
+                volumes={str(instance_path.resolve()): {"bind": "/data", "mode": "rw"}},
                 environment={
                     "FOUNDRY_USERNAME": username,
                     "FOUNDRY_PASSWORD": password,
